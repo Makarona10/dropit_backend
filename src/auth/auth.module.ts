@@ -1,16 +1,47 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { UserModule } from 'src/user/user.module';
 import { PasswordModule } from 'src/password/password.module';
 import { PasswordService } from 'src/password/password.service';
 import { UserService } from 'src/user/user.service';
-import { PrismaService } from 'src/prisma/prisma.service';
 import { PrismaModule } from 'src/prisma/prisma.module';
+import { JwtModule } from '@nestjs/jwt';
+import { JwtStrategy } from './jwt.strategy';
+import { LocalStrategy } from './local.strategy';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { RedisService } from 'src/common/services/redis.service';
+import { RefreshTokenRateLimitMiddleware } from 'src/common/middlewares/rate-limit.middleware';
 
 @Module({
-  imports: [UserModule, PasswordModule,PrismaModule],
-  providers: [AuthService, PasswordService, UserService,],
+  imports: [
+    UserModule,
+    PasswordModule,
+    PrismaModule,
+    PasswordModule,
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_ACCESS_SECRET'),
+        signOptions: {
+          expiresIn: configService.get<string>('JWT_ACCESS_EXPIRATION', '15m'),
+        },
+      }),
+    }),
+  ],
+  providers: [
+    AuthService,
+    PasswordService,
+    UserService,
+    LocalStrategy,
+    JwtStrategy,
+    RedisService,
+  ],
   controllers: [AuthController],
 })
-export class AuthModule {}
+export class AuthModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(RefreshTokenRateLimitMiddleware).forRoutes('auth/refresh');
+  }
+}
