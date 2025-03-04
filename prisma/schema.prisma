@@ -14,19 +14,116 @@ datasource db {
 }
 
 model User {
-  id        Int        @id @default(autoincrement())
-  email     String     @unique @db.VarChar(256)
-  firstName String     @db.VarChar(25)
-  lastName  String     @db.VarChar(25)
-  passwords Password[] // One-to-Many Relation
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  id           Int           @id @default(autoincrement())
+  email        String        @unique @db.VarChar(256)
+  firstName    String        @db.VarChar(25)
+  lastName     String        @db.VarChar(25)
+  passwords    Password[] // One-to-Many Relation
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  File         File[]
+  Favourite    Favourite[]
+  StorageQuota StorageQuota?
+  Tag          Tag[]
 }
 
 model Password {
-  id       Int       @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   hash      String   @db.VarChar(256)
-  userId    Int      
+  userId    Int
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+}
+
+model File {
+  id           Int           @id @default(autoincrement())
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       Int
+  name         String        @db.VarChar(255)
+  sizeInKb     Int
+  extension    String        @db.VarChar(128)
+  createdAt    DateTime      @default(now())
+  Audio        Audio?
+  Video        Video?
+  Image        Image?
+  Favourite    Favourite[]
+  DeletedFiles DeletedFiles?
+  FilesTags    FilesTags[]
+  FileParent   FileParent?
+}
+
+model Audio {
+  fileId   Int    @id
+  file     File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  duration Int
+  bitRate  String @db.VarChar(256)
+}
+
+model Video {
+  videoId    Int    @id
+  file       File   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  resolution String @db.VarChar(64)
+  duration   Int
+  fps        Int
+}
+
+model Image {
+  imageId    Int    @id
+  file       File   @relation(fields: [imageId], references: [id], onDelete: Cascade)
+  resolution String @db.VarChar(64)
+}
+
+model Favourite {
+  file   File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  fileId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId Int
+
+  @@id([fileId, userId])
+}
+
+model StorageQuota {
+  id         Int  @id @default(autoincrement())
+  userId     Int  @unique
+  user       User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  totalQuota Int
+  usedQuota  Int
+}
+
+model DeletedFiles {
+  fileId     Int      @id
+  file       File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  deletionOn DateTime @default(now())
+}
+
+model Tag {
+  id        Int         @id
+  userId    Int
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String      @db.VarChar(256)
+  createdAt DateTime    @default(now())
+  FilesTags FilesTags[]
+}
+
+model FilesTags {
+  fileId Int
+  file   File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  tagId  Int
+  tag    Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([fileId, tagId])
+}
+
+model Folder {
+  id         Int          @id @default(autoincrement())
+  name       String       @db.VarChar(128)
+  path       String       @db.Text
+  FileParent FileParent[]
+}
+
+model FileParent {
+  fileId   Int    @id
+  file     File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  folderId Int
+  folder   Folder @relation(fields: [folderId], references: [id])
 }
