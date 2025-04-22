@@ -5,7 +5,8 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {
@@ -14,7 +15,7 @@ datasource db {
 }
 
 model User {
-  id           Int           @id @default(autoincrement())
+  id           String        @id @default(uuid()) @db.Uuid
   email        String        @unique @db.VarChar(256)
   firstName    String        @db.VarChar(25)
   lastName     String        @db.VarChar(25)
@@ -25,22 +26,32 @@ model User {
   Favourite    Favourite[]
   StorageQuota StorageQuota?
   Tag          Tag[]
+  Folder       Folder[]
 }
 
 model Password {
   id        Int      @id @default(autoincrement())
   hash      String   @db.VarChar(256)
-  userId    Int
+  userId    String   @unique @db.Uuid
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+}
+
+enum FileType {
+  video
+  audio
+  image
+  other
 }
 
 model File {
   id           Int           @id @default(autoincrement())
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId       Int
+  userId       String        @db.Uuid
   name         String        @db.VarChar(255)
-  sizeInKb     Int
+  uniqueName   String        @db.VarChar(2048)
+  sizeInKb     Float
+  type         FileType
   extension    String        @db.VarChar(128)
   createdAt    DateTime      @default(now())
   Audio        Audio?
@@ -53,10 +64,9 @@ model File {
 }
 
 model Audio {
-  fileId   Int    @id
-  file     File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  fileId   Int  @id
+  file     File @relation(fields: [fileId], references: [id], onDelete: Cascade)
   duration Int
-  bitRate  String @db.VarChar(256)
 }
 
 model Video {
@@ -74,31 +84,32 @@ model Image {
 }
 
 model Favourite {
-  file   File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
   fileId Int
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId Int
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @db.Uuid
 
   @@id([fileId, userId])
 }
 
 model StorageQuota {
-  id         Int  @id @default(autoincrement())
-  userId     Int  @unique
-  user       User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         Int    @id @default(autoincrement())
+  userId     String @unique @db.Uuid
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // total and used QuotaInMB
   totalQuota Int
-  usedQuota  Int
+  usedQuota  Float
 }
 
 model DeletedFiles {
-  fileId     Int      @id
-  file       File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
-  deletionOn DateTime @default(now())
+  fileId    Int      @id
+  file      File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  deletedAt DateTime @default(now())
 }
 
 model Tag {
-  id        Int         @id
-  userId    Int
+  id        Int         @id @default(autoincrement())
+  userId    String      @db.Uuid
   user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String      @db.VarChar(256)
   createdAt DateTime    @default(now())
@@ -118,7 +129,15 @@ model Folder {
   id         Int          @id @default(autoincrement())
   name       String       @db.VarChar(128)
   path       String       @db.Text
+  userId     String       @db.Uuid
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime     @default(now())
   FileParent FileParent[]
+
+  parentId       Int?             @db.Integer
+  parent         Folder?          @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children       Folder[]         @relation("FolderHierarchy")
+  DeletedFolders DeletedFolders[]
 }
 
 model FileParent {
@@ -126,4 +145,10 @@ model FileParent {
   file     File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
   folderId Int
   folder   Folder @relation(fields: [folderId], references: [id])
+}
+
+model DeletedFolders {
+  folderId  Int      @id
+  folder    Folder   @relation(fields: [folderId], references: [id])
+  deletedAt DateTime @default(now())
 }
