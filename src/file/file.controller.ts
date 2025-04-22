@@ -26,17 +26,17 @@ import { lookup } from 'mime-type';
 export class FileController {
   constructor(private readonly fileService: FileService) {}
 
-  @UseGuards(JwtAuthGuard)
+  // @UseGuards(JwtAuthGuard)
   @Post('upload-file/:userId')
   @UseInterceptors(FileInterceptor('file'))
   async saveFile(
     @UploadedFile() file: Express.Multer.File,
     @Param('userId', new ParseUUIDPipe()) userId: string,
-    @Body('directory', new ParseIntPipe()) parentId: number,
+    @Query('parentId') parentId: number,
   ) {
     await this.fileService.uploadFile(userId, file, parentId);
     return {
-      message: 'File upload successfully',
+      message: 'File uploaded successfully',
       statusCode: 201,
     };
   }
@@ -51,6 +51,17 @@ export class FileController {
       data: result,
       statusCode: 200,
     };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('get-files/:userId')
+  async getFiles(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body('order') order: 'asc' | 'desc' | null,
+    @Body('filter') filter: 'images' | 'videos' | 'audios' | null,
+    @Body('page') page: number | null,
+  ) {
+    throw new NotImplementedException();
   }
 
   @UseGuards(JwtAuthGuard)

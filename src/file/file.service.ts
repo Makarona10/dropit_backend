@@ -12,6 +12,7 @@ import Ffmpeg from 'fluent-ffmpeg';
 import sharp from 'sharp';
 import path from 'path';
 import { FolderService } from 'src/folder/folder.service';
+import { time } from 'console';
 
 // TODO: Thumbnail will be shown on the restored files
 
@@ -41,14 +42,14 @@ export class FileService {
           fileId: string | null;
         }>
       >`
-        SELECT f.id, f.name, f.size_in_kb, f.createdAt, a.duration AS aud_duration,
-        v.duration AS vid_duration, v.resolution, v.fps, i.resolution, fav.fileId
-        FROM File f LEFT JOIN Audio a ON f.id = a.fileId
-        LEFT JOIN Video v ON f.id = v.videoId
-        LEFT JOIN Image i ON f.id = i.imageId
-        LEFT JOIN Favourit fav ON f.id = fav.fileId
-        WHERE f.userId = ${id}
-        ORDER BY f.createdAt DESC
+        SELECT "f"."id", "f"."name", "f"."size_in_kb", "f"."createdAt", "a"."duration" AS "aud_duration",
+        "v"."duration" AS "vid_duration", "v"."resolution", "v"."fps", "i"."resolution", "fav"."fileId"
+        FROM "File" "f" LEFT JOIN "Audio" "a" ON "f"."id" = "a"."fileId"
+        LEFT JOIN "Video" "v" ON "f"."id" = "v"."videoId"
+        LEFT JOIN "Image" "i" ON "f"."id" = "i"."imageId"
+        LEFT JOIN "Favourite" "fav" ON f.id = "fav"."fileId"
+        WHERE "f"."userId" = ${id}::uuid
+        ORDER BY "f"."createdAt" DESC
         LIMIT 12
         `;
 
@@ -77,8 +78,8 @@ export class FileService {
     const fileParent = await this.prismaService.$queryRaw<
       Array<{ path: string; name: string }>
     >`
-        SELECT Folder.path, Folder.name FROM FileParent JOIN Folder ON folderId = id
-        WHERE fileId = ${fileId}
+        SELECT "Folder"."path", "Folder"."name" FROM "FileParent" JOIN "Folder" ON "folderId" = "id"
+        WHERE "fileId" = ${fileId}
       `;
 
     const filePath: string = fileParent[0]?.path
@@ -94,6 +95,7 @@ export class FileService {
     directory: string,
     uniqueName: string,
   ) {
+    fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(`${directory}/${uniqueName}`, file.buffer);
   }
 
@@ -103,6 +105,7 @@ export class FileService {
     directory: string,
     uniqueName: string,
   ) {
+    fs.mkdirSync(directory, { recursive: true });
     const ws = fs.createWriteStream(directory.concat(`/${uniqueName}`), {
       encoding: 'binary',
     });
@@ -305,13 +308,14 @@ export class FileService {
         },
       });
 
-      await this.prismaService.fileParent.create({
-        data: {
-          fileId: savedFile.id,
-          folderId,
-        },
-      });
-
+      if (folderId) {
+        await this.prismaService.fileParent.create({
+          data: {
+            fileId: savedFile.id,
+            folderId,
+          },
+        });
+      }
       return savedFile;
     } catch (error: any) {
       console.error(error);
@@ -328,68 +332,86 @@ export class FileService {
     file: Express.Multer.File,
     parentId: number,
   ) {
-    const uniqueName: string = Date.now() + file.filename;
-    const fileExtension: string = file.filename.split('.').pop().toLowerCase();
-    const fType: string = file.mimetype.split('/')[0].toLowerCase();
-    let realType: 'audio' | 'video' | 'image' | 'other' = 'other';
+    if (!file)
+      throw new BadRequestException('No file selected, please upload a file!');
+    try {
+      const uniqueName: string = Date.now() + file.originalname;
+      const fileExtension: string = file.originalname
+        .split('.')
+        .pop()
+        .toLowerCase();
+      const fType: string = file.mimetype.split('/')[0].toLowerCase();
+      let realType: 'audio' | 'video' | 'image' | 'other' = 'other';
 
-    if (fType === 'audio') {
-      realType = 'audio';
-    } else if (fType === 'video') {
-      realType = 'video';
-    } else if (fType === 'image') {
-      realType = 'image';
-    }
+      if (fType === 'audio') {
+        realType = 'audio';
+      } else if (fType === 'video') {
+        realType = 'video';
+      } else if (fType === 'image') {
+        realType = 'image';
+      }
 
-    const parentDir: string = await this.folderService.getFolderDir(parentId);
-    if (file.size >= 1024 * 1024 * 100) {
-      await this.saveLargeFileToSystem(file, parentDir, uniqueName);
-    } else {
-      await this.saveFileToSystem(file, parentDir, uniqueName);
-    }
+      const userUploadsPath = path.join(__dirname, '../../uploads/', userId);
+      const parentDir: string = parentId
+        ? await this.folderService.getFolderDir(parentId)
+        : '';
 
-    const savedFile = await this.saveFileToDB(
-      userId,
-      file.filename,
-      uniqueName,
-      file.size * 1024,
-      fileExtension,
-      realType,
-      parentId,
-    );
+      const fullDir = path.join(userUploadsPath, parentDir);
+      if (file.size >= 1024 * 1024 * 100) {
+        await this.saveLargeFileToSystem(file, fullDir, uniqueName);
+      } else {
+        await this.saveFileToSystem(file, fullDir, uniqueName);
+      }
 
-    const filePath = `${parentDir}/${uniqueName}`;
-    if (fType === 'video') {
-      const duration: number = await this.getVideoDuration(filePath);
-      const fps: number = await this.getVideoFPS(filePath);
-      const resolution = await this.getMediaResolution(filePath, 'video');
-      await this.prismaService.video.create({
-        data: {
-          resolution: `${resolution.width} * ${resolution.height}`,
-          videoId: savedFile.id,
-          duration: duration || 0,
-          fps,
-        },
-      });
-    } else if (fType === 'audio') {
-      const duration = await this.getVideoDuration(filePath);
-      await this.prismaService.audio.create({
-        data: {
-          fileId: savedFile.id,
-          duration,
-        },
-      });
-    } else if (fType === 'image') {
-      const resolution = await this.getMediaResolution(filePath, 'image');
-      await this.prismaService.image.create({
-        data: {
-          resolution: `${resolution.width} * ${resolution.height}`,
-          imageId: savedFile.id,
-        },
-      });
+      const savedFile = await this.saveFileToDB(
+        userId,
+        file.originalname,
+        uniqueName,
+        file.size / 1024,
+        fileExtension,
+        realType,
+        parentId,
+      );
+
+      const filePath = `${parentDir}/${uniqueName}`;
+      if (fType === 'video') {
+        const duration: number = await this.getVideoDuration(filePath);
+        const fps: number = await this.getVideoFPS(filePath);
+        const resolution = await this.getMediaResolution(filePath, 'video');
+        await this.prismaService.video.create({
+          data: {
+            resolution: `${resolution.width} * ${resolution.height}`,
+            videoId: savedFile.id,
+            duration: duration || 0,
+            fps,
+          },
+        });
+      } else if (fType === 'audio') {
+        const duration = await this.getVideoDuration(filePath);
+        await this.prismaService.audio.create({
+          data: {
+            fileId: savedFile.id,
+            duration,
+          },
+        });
+      } else if (fType === 'image') {
+        const resolution = await this.getMediaResolution(filePath, 'image');
+        await this.prismaService.image.create({
+          data: {
+            resolution: `${resolution.width} * ${resolution.height}`,
+            imageId: savedFile.id,
+          },
+        });
+      }
+    } catch (error: any) {
+      // TODO: Delete file from the system if error happens during the save process
+      console.error(error);
+      throw new HttpException(
+        error?.response?.message || 'Error happened while uploading file!',
+        error?.response?.statusCode || 500,
+      );
     }
   }
-
   async getFavouriteFiles(
     userId: string,
     args: {
@@ -402,10 +424,10 @@ export class FileService {
 
     try {
       const files = await this.prismaService.$queryRaw`
-      SELECT f.* FROM Files f JOIN Favourite fav
-      ON f.id = fav.fileId
-      WHERE fav.userId = ${userId}
-      ORDER BY f.createdAt DESC
+      SELECT "f".* FROM "Files" "f" JOIN "Favourite" "fav"
+      ON "f"."id" = "fav"."fileId"
+      WHERE "fav"."userId" = ${userId}
+      ORDER BY "f"."createdAt" DESC
       OFFSET ${offset}
       LIMIT 16
     `;
@@ -435,8 +457,8 @@ export class FileService {
       const fileParent = await this.prismaService.$queryRaw<
         Array<{ path: string }>
       >`
-        SELECT Folder.path FROM FileParent JOIN Folder ON folderId = id
-        WHERE fileId = ${fileId}
+        SELECT "Folder"."path" FROM "FileParent" JOIN "Folder" ON "folderId" = "id"
+        WHERE "fileId" = ${fileId}
       `;
 
       let filePath: string = fileParent[0]?.path
