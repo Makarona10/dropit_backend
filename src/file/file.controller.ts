@@ -11,6 +11,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   Response,
   UploadedFile,
   UseGuards,
@@ -19,44 +20,40 @@ import {
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { FileService } from './file.service';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Response as Res } from 'express';
+import { Request, Response as Res } from 'express';
 import { lookup } from 'mime-type';
+import { resObj } from 'src/utils';
 
 @Controller('file')
 export class FileController {
   constructor(private readonly fileService: FileService) {}
 
-  // @UseGuards(JwtAuthGuard)
-  @Post('upload-file/:userId')
+  @UseGuards(JwtAuthGuard)
+  @Post('upload-file')
   @UseInterceptors(FileInterceptor('file'))
   async saveFile(
+    @Req() req: Request,
     @UploadedFile() file: Express.Multer.File,
-    @Param('userId', new ParseUUIDPipe()) userId: string,
     @Query('parentId') parentId: number,
   ) {
-    await this.fileService.uploadFile(userId, file, parentId);
-    return {
-      message: 'File uploaded successfully',
-      statusCode: 201,
-    };
+    const user = req.user as { id: string; email: string };
+    await this.fileService.uploadFile(user.id, file, +parentId);
+    return resObj(201, 'File uploaded successfully', []);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('recently-uploaded/:userId')
-  async getRecentUserFilesAndFolders(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
-  ) {
-    const result = await this.fileService.getRecentUserFilesAndFolders(userId);
-    return {
-      data: result,
-      statusCode: 200,
-    };
+  @Get('recently-uploaded/')
+  async getRecentUserFilesAndFolders(@Req() req: Request) {
+    const user = req.user as { id: string; email: string };
+
+    const result = await this.fileService.getRecentUserFilesAndFolders(user.id);
+    return resObj(200, 'Files and folders retrieved successfully', result);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('get-files/:userId')
+  @Get('get-files')
   async getFiles(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Body('order') order: 'asc' | 'desc' | null,
     @Body('filter') filter: 'images' | 'videos' | 'audios' | null,
     @Body('page') page: number | null,
@@ -65,59 +62,61 @@ export class FileController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('get-favourite/:userId')
+  @Get('get-favourite')
   async getFavouriteFiles(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Body('order') order: 'asc' | 'desc' | null,
     @Body('filter') filter: 'images' | 'videos' | 'audios' | null,
     @Body('page') page: number | null,
   ) {
+    const user = req.user as { id: string; email: string };
     const _page: number = page ? page : 1;
-    const result = await this.fileService.getFavouriteFiles(userId, {
+    const result = await this.fileService.getFavouriteFiles(user.id, {
       order,
       filter,
       page: _page,
     });
 
-    return {
-      data: result,
-      message: 'Favourite files retrieved successfully',
-    };
+    return resObj(200, 'Favourite files retrieved successfully', result);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Delete('delete/:userId')
+  @Delete('delete')
   async deleteFilePermanently(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Body('fileId', new ParseIntPipe()) fileId: number,
   ) {
-    await this.fileService.deleteOwnedFile(userId, fileId);
+    const user = req.user as { id: string; email: string };
+    await this.fileService.deleteOwnedFile(user.id, fileId);
 
-    return {
-      message: 'File deleted permanently',
-    };
+    return resObj(200, 'File deleted permanently', []);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Patch('change-directory/:userId')
+  @Patch('change-directory')
   async changeFileDirectory(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Body('fileId', new ParseIntPipe()) fileId: number,
     @Body('folderId', new ParseIntPipe()) folderId: number,
   ) {
-    return await this.fileService.changeFileDirectory(userId, fileId, folderId);
+    const user = req.user as { id: string; email: string };
+
+    await this.fileService.changeFileDirectory(user.id, fileId, folderId);
+
+    return resObj(200, 'Directory changed successfully', []);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('download/:userId')
+  @Get('download')
   async downloadFile(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('fileId', new ParseIntPipe()) fileId: number,
     @Response() res: Res,
   ) {
+    const user = req.user as { id: string; email: string };
     try {
       const { stream, stats, fileName, extension } =
-        await this.fileService.downloadFile(userId, fileId);
+        await this.fileService.downloadFile(user.id, fileId);
       const contentType = lookup(extension) || 'application/octet-stream';
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
@@ -147,11 +146,13 @@ export class FileController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('share/:userId')
+  @Get('share')
   async shareFile(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('fileId', new ParseIntPipe()) fileId: number,
   ) {
+    throw new NotImplementedException('Coming soon...');
+    const user = req.user as { id: string; email: string };
     return this.fileService.shareFile();
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { RedisService } from 'src/common/services/redis.service';
 import { PasswordService } from 'src/password/password.service';
@@ -63,28 +63,35 @@ export class AuthService {
 
   async login(user: Payload, res: Response) {
     const payload = { id: user.id, email: user.email };
-    const data = await this.generateTokens(payload);
+    try {
+      const data = await this.generateTokens(payload);
 
-    const hashedRefreshToken = await argon.hash(data.refresh_token, {
-      hashLength: 60,
-      type: argon.argon2id,
-      secret: Buffer.from(process.env.JWT_REFRESH_HASH_SECRET, 'base64'),
-    });
+      const hashedRefreshToken = await argon.hash(data.refresh_token, {
+        hashLength: 60,
+        type: argon.argon2id,
+        secret: Buffer.from(process.env.JWT_REFRESH_HASH_SECRET, 'base64'),
+      });
 
-    await this.redisService.setValue(
-      `refresh_token:${payload.id}`,
-      hashedRefreshToken,
-      Number(process.env.JWT_REFRESH_EXPIRATION),
-    );
+      await this.redisService.setValue(
+        `refresh_token:${payload.id}`,
+        hashedRefreshToken,
+        Number(process.env.JWT_REFRESH_EXPIRATION),
+      );
 
-    res.cookie('refresh_token', data.refresh_token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/auth/refresh',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-    return { access_token: data.access_token };
+      res.cookie('refresh_token', data.refresh_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/auth/refresh',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      return { access_token: data.access_token };
+    } catch (error: any) {
+      throw new InternalServerErrorException(
+        error.message || 'Error happened while logging in',
+      );
+    }
   }
 
   async logout(user: Payload) {

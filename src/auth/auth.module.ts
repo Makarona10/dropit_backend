@@ -12,9 +12,11 @@ import { LocalStrategy } from './local.strategy';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { RedisService } from 'src/common/services/redis.service';
 import { RefreshTokenRateLimitMiddleware } from 'src/common/middlewares/rate-limit.middleware';
+import { PassportModule } from '@nestjs/passport';
 
 @Module({
   imports: [
+    PassportModule,
     UserModule,
     PasswordModule,
     PrismaModule,
@@ -25,7 +27,7 @@ import { RefreshTokenRateLimitMiddleware } from 'src/common/middlewares/rate-lim
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_ACCESS_SECRET'),
         signOptions: {
-          expiresIn: configService.get<string>('JWT_ACCESS_EXPIRATION', '15m'),
+          expiresIn: configService.get<string>('JWT_ACCESS_EXPIRATION', '24d'),
         },
       }),
     }),

@@ -42,7 +42,7 @@ export class FileService {
           fileId: string | null;
         }>
       >`
-        SELECT "f"."id", "f"."name", "f"."size_in_kb", "f"."createdAt", "a"."duration" AS "aud_duration",
+        SELECT "f"."id", "f"."name", "f"."sizeInKb", "f"."createdAt", "a"."duration" AS "aud_duration",
         "v"."duration" AS "vid_duration", "v"."resolution", "v"."fps", "i"."resolution", "fav"."fileId"
         FROM "File" "f" LEFT JOIN "Audio" "a" ON "f"."id" = "a"."fileId"
         LEFT JOIN "Video" "v" ON "f"."id" = "v"."videoId"
@@ -259,6 +259,7 @@ export class FileService {
 
     // Handle image files
     if (type === 'image') {
+      console.log(filePath);
       try {
         const metadata = await sharp(filePath).metadata();
 
@@ -274,6 +275,7 @@ export class FileService {
           height: metadata.height,
         };
       } catch (error) {
+        console.log(error);
         throw new BadRequestException(
           `Failed to get image resolution: ${error.message}`,
         );
@@ -330,7 +332,7 @@ export class FileService {
   async uploadFile(
     userId: string,
     file: Express.Multer.File,
-    parentId: number,
+    parentId?: number,
   ) {
     if (!file)
       throw new BadRequestException('No file selected, please upload a file!');
@@ -352,7 +354,7 @@ export class FileService {
       }
 
       const userUploadsPath = path.join(__dirname, '../../uploads/', userId);
-      const parentDir: string = parentId
+      const parentDir: string = +parentId
         ? await this.folderService.getFolderDir(parentId)
         : '';
 

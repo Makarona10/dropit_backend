@@ -3,6 +3,7 @@ import {
   Controller,
   Post,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
   UseInterceptors,
@@ -36,8 +37,15 @@ export class AuthController {
 
   @UseGuards(LocalAuthGuard)
   @Post('login')
-  async login(@Req() req: Request, res: Response) {
-    return this.authService.login(req.user as Payload, res);
+  async login(@Req() req: Request, @Res() res: Response) {
+    const response = await this.authService.login(req.user as Payload, res);
+    return res.status(200).json({
+      statusCode: 200,
+      message: 'User found',
+      data: {
+        access_token: response.access_token,
+      },
+    });
   }
 
   @Post('refresh')
