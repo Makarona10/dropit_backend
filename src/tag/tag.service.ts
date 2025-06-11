@@ -11,17 +11,20 @@ import { PrismaService } from 'src/prisma/prisma.service';
 export class TagService {
   constructor(private readonly prismaService: PrismaService) {}
 
-  async getUserTags(userId: string): Promise<Tag[]> {
+  async getUserTags(userId: string, page: number): Promise<Tag[]> {
+    const offset = (page - 1) * 20;
+
     try {
       const tags = await this.prismaService.tag.findMany({
         where: {
           userId,
         },
+        skip: offset,
+        take: 20,
       });
 
       return tags;
     } catch (error: any) {
-      console.error(error);
       throw new InternalServerErrorException('Failed to load tags!', {
         description: error?.message,
       });
@@ -50,9 +53,26 @@ export class TagService {
 
       return files;
     } catch (error: any) {
-      console.error(error);
       throw new HttpException(
         error?.response?.message || 'Error happened while retrieving files',
+        error?.response?.statusCode || 500,
+      );
+    }
+  }
+
+  async addTag(userId: string, name: string) {
+    try {
+      await this.prismaService.tag.create({
+        data: {
+          name,
+          userId,
+        },
+      });
+
+      return;
+    } catch (error) {
+      throw new HttpException(
+        error?.response?.message || 'Error happened while creating tag',
         error?.response?.statusCode || 500,
       );
     }
@@ -133,6 +153,26 @@ export class TagService {
       throw new HttpException(
         error?.response?.message ||
           'Unexpected error happened while renaming the tag!',
+        error?.response?.statusCode || 500,
+      );
+    }
+  }
+
+  async isTagExisted(name: string, userId: string) {
+    try {
+      const tag = await this.prismaService.tag.findFirst({
+        where: {
+          userId,
+          name,
+        },
+      });
+
+      if (tag) return true;
+      return false;
+    } catch (error) {
+      throw new HttpException(
+        error?.response?.message ||
+          'Unexpected error happened while finding the tag!',
         error?.response?.statusCode || 500,
       );
     }

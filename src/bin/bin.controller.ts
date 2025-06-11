@@ -3,74 +3,77 @@ import {
   Delete,
   Get,
   NotImplementedException,
-  Param,
   ParseIntPipe,
-  ParseUUIDPipe,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { BinService } from './bin.service';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+import { Request } from 'express';
+import { resObj } from 'src/utils';
 
 @Controller('bin')
 export class BinController {
   constructor(private readonly binService: BinService) {}
 
   @UseGuards(JwtAuthGuard)
-  @Post('move-file-to-bin/:userId')
+  @Post('move-file-to-bin')
   async moveFileToBin(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('fileId', new ParseIntPipe()) fileId: number,
   ) {
-    return this.binService.moveFileToBin(userId, fileId);
+    const user = req.user as { id: string; email: string };
+    await this.binService.moveFileToBin(user.id, fileId);
+    return resObj(200, 'File moved to trash successfully', []);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('move-folder-to-bin/:userId')
+  @Post('move-folder-to-bin')
   async moveFolderToBin(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('folderId', new ParseIntPipe()) fileId: number,
   ) {
     throw new NotImplementedException('Not Implemented yet');
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('clean-bin/:userId')
+  @Post('clean-bin')
   async cleanBin(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('folderId', new ParseIntPipe()) fileId: number,
   ) {
     throw new NotImplementedException('Coming soon...');
   }
 
-  // @UseGuards(JwtAuthGuard)
-  @Get('deleted-files/:userId')
+  @UseGuards(JwtAuthGuard)
+  @Get('deleted-files')
   async getDeletedFiles(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('order_by_date') order: 'desc' | 'asc',
     @Query('type')
     type: 'image' | 'video' | 'audio' | 'other',
   ) {
+    const user = req.user as { id: string; email: string };
     const files = await this.binService.getDeletedFiles(
-      userId,
+      user.id,
       order || 'desc',
       type,
     );
 
-    return files;
+    return resObj(200, 'Deleted files retrieved successfully', files);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Delete('delete-file-permanently/:userId')
+  @Delete('delete-file-permanently')
   async deleteFilePermanently(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('fileId', new ParseIntPipe()) fileId: number,
   ) {
-    await this.binService.deleteFilePermanently(fileId, userId);
+    const user = req.user as { id: string; email: string };
+    await this.binService.deleteFilePermanently(fileId, user.id);
 
-    return {
-      message: 'File deleted successfully!',
-    };
+    return resObj(200, 'File deleted successfully', []);
   }
 }

@@ -92,7 +92,7 @@ export class FolderService {
     }
   }
 
-  async deleteFolder(folderId: number) {
+  async deleteFolder(userId: string, folderId: number) {
     throw new NotImplementedException('Not Implemented yet');
   }
 

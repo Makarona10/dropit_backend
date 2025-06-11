@@ -9,67 +9,70 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { FolderService } from './folder.service';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+import { Request } from 'express';
+import { resObj } from 'src/utils';
 
 @Controller('folder')
 export class FolderController {
   constructor(private readonly folderService: FolderService) {}
 
   @UseGuards(JwtAuthGuard)
-  @Post('create/:userId')
+  @Post('create')
   async createFolder(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('parentId', new ParseIntPipe()) parentId: string,
     @Query('name') name: string,
   ) {
     if (!name || typeof name != 'string')
       throw new BadRequestException('Folder must have a name');
 
-    await this.folderService.createFolder(userId, +parentId, name);
+    const user = req.user as { id: string; email: string };
+    await this.folderService.createFolder(user.id, +parentId, name);
     return {
       message: 'Folder created successfully',
     };
   }
 
   @UseGuards(JwtAuthGuard)
-  @Delete('delete/:userId')
+  @Delete('delete')
   async deleteFolder(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('folderId', new ParseIntPipe()) folderId: number,
   ) {
-    await this.folderService.deleteFolder(+folderId);
-    return {
-      message: 'Folder deleted successfully',
-    };
+    const user = req.user as { id: string; email: string };
+    await this.folderService.deleteFolder(user.id, +folderId);
+    return resObj(200, 'Folder deleted successfully', []);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Patch('change-name/:userId')
+  @Patch('change-name')
   async changeFolderName(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('folderId', new ParseIntPipe()) folderId: number,
     @Query('newName') newName: string,
   ) {
-    await this.folderService.changeFolderName(+folderId, newName, userId);
-    return {
-      message: 'Folder name updated successfully',
-    };
+    const user = req.user as { id: string; email: string };
+    await this.folderService.changeFolderName(+folderId, newName, user.id);
+    return resObj(200, 'Folder name updated successfully', []);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('file-content/:userId')
+  @Get('file-content')
   /**
    * If folderId = 0 -> API will return root directory files
    *
    * If folderId > 0 -> API will return the intended folder files
    */
   async getFolderContent(
-    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
     @Query('folderId', new ParseIntPipe()) folderId: number,
   ) {
-    return await this.folderService.getFolderContent(userId, +folderId);
+    const user = req.user as { id: string; email: string };
+    return await this.folderService.getFolderContent(user.id, +folderId);
   }
 }

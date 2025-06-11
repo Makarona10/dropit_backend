@@ -15,12 +15,21 @@ import { TagModule } from './tag/tag.module';
 import { StorageQuotaModule } from './storage-quota/storage-quota.module';
 import { FavouriteModule } from './favourite/favourite.module';
 import { BinModule } from './bin/bin.module';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env', '.env.development'],
+    }),
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          ttl: 60000,
+          limit: 50,
+        },
+      ],
     }),
     PrismaModule,
     AuthModule,
