@@ -1,7 +1,10 @@
 import {
+  BadRequestException,
   Controller,
   Delete,
+  Get,
   NotImplementedException,
+  Param,
   ParseIntPipe,
   Post,
   Query,
@@ -41,6 +44,27 @@ export class FavouriteController {
     await this.favouriteService.removeFileFromFavourites(user.id, fileId);
 
     return resObj(200, 'File removed successfully from favourites', []);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('get-images')
+  async getFavouriteImages(
+    @Req() req: Request,
+    @Param('order') order: 'asc' | 'desc' | null,
+    @Param('extension') extension: string | null,
+    @Query('page') page: number,
+  ) {
+    if (+page < 1)
+      return new BadRequestException('page number must me greater than 0');
+    const user = req.user as { id: string; email: string };
+    const result = await this.favouriteService.getFavouriteImages(
+      user.id,
+      order,
+      extension,
+      page || 1,
+    );
+
+    return resObj(200, 'Favourite images retrieved successfully', result);
   }
 
   @UseGuards(JwtAuthGuard)

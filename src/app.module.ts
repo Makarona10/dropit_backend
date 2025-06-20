@@ -15,7 +15,10 @@ import { TagModule } from './tag/tag.module';
 import { StorageQuotaModule } from './storage-quota/storage-quota.module';
 import { FavouriteModule } from './favourite/favourite.module';
 import { BinModule } from './bin/bin.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { join } from 'path';
+import { SearchModule } from './search/search.module';
 
 @Module({
   imports: [
@@ -31,6 +34,10 @@ import { ThrottlerModule } from '@nestjs/throttler';
         },
       ],
     }),
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'uploads'),
+      serveRoot: '/uploads', // URL prefix (e.g., http://localhost:3000/uploads/filename.ext)
+    }),
     PrismaModule,
     AuthModule,
     UserModule,
@@ -41,6 +48,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
     StorageQuotaModule,
     FavouriteModule,
     BinModule,
+    SearchModule,
   ],
   controllers: [AppController],
   providers: [

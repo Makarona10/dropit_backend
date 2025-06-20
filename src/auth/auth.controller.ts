@@ -17,6 +17,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { Request, Response } from 'express';
 import { RegisterDto } from './dto/register.dto';
 import { Payload } from './interfaces/payload.interface';
+import { FolderService } from 'src/folder/folder.service';
 
 @Controller('auth')
 @UseInterceptors(ResponseInterceptor)
@@ -25,13 +26,15 @@ export class AuthController {
     private readonly passwordService: PasswordService,
     private readonly userService: UserService,
     private readonly authService: AuthService,
+    private readonly folderService: FolderService,
   ) {}
 
   @Post('register')
   async register(@Body() body: RegisterDto) {
     const { password, ...user } = body;
     const { hash } = await this.passwordService.hashPassword(password);
-    await this.userService.createUser(user, hash);
+    const createdUser = await this.userService.createUser(user, hash);
+    await this.folderService.createFolder(createdUser.id, null, 'main');
     return { message: 'User created successfully' };
   }
 

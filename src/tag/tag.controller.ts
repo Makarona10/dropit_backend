@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   HttpCode,
+  Param,
   ParseIntPipe,
   Patch,
   Post,
@@ -34,12 +35,13 @@ export class TagController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('tag-files')
+  @Get('tag-files/:tagId')
   async getTagFiles(
     @Req() req: Request,
-    @Query('tagId', new ParseIntPipe()) tagId: number,
-    @Body('orderBy') orderBy: 'name' | 'createdAt',
-    @Body('arrange') arrange: 'asc' | 'desc',
+    @Param('tagId', new ParseIntPipe()) tagId: number,
+    @Query('page', new ParseIntPipe()) page: number,
+    @Query('orderBy') orderBy: 'name' | 'createdAt',
+    @Query('arrange') arrange: 'asc' | 'desc',
   ) {
     const user = req.user as { id: string; email: string };
     const files = await this.tagService.getTagFiles(
@@ -47,9 +49,22 @@ export class TagController {
       +tagId,
       orderBy || 'createdAt',
       arrange || 'desc',
+      +page,
     );
 
     return resObj(200, 'Tag files retrieved successfully', files);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('add-file/:tagId/:fileId')
+  async addFileToTag(
+    @Req() req: Request,
+    @Param('tagId', new ParseIntPipe()) tagId: number,
+    @Param('fileId', new ParseIntPipe()) fileId: number,
+  ) {
+    const user = req.user as { id: string; email: string };
+    await this.tagService.addFileToTag(user.id, fileId, tagId);
+    return resObj(201, 'File tagged successfully!', []);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -83,7 +98,7 @@ export class TagController {
     const user = req.user as { id: string; email: string };
     await this.tagService.deleteTag(+tagId, user.id);
 
-    return { message: 'Tag delete successfully' };
+    return resObj(200, 'Tag deleted successfully', []);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -91,7 +106,8 @@ export class TagController {
   async searchTag(@Req() req: Request, @Query('name') name: string) {
     const user = req.user as { id: string; email: string };
     if (!name) throw new BadRequestException('Please provide a search string');
-    return await this.tagService.searchTagsByName(name, user.id);
+    const tags = await this.tagService.searchTagsByName(name, user.id);
+    return resObj(200, 'Tags retrieved!', tags);
   }
 
   @UseGuards(JwtAuthGuard)

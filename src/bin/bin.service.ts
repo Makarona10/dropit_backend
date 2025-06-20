@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  HttpException,
-  Injectable,
-  InternalServerErrorException,
-} from '@nestjs/common';
-import { File } from '@prisma/client';
+import { BadRequestException, HttpException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 
 @Injectable()
@@ -41,10 +35,27 @@ export class BinService {
 
   async getDeletedFiles(
     userId: string,
+    page: number,
     order: 'desc' | 'asc',
     type?: 'image' | 'video' | 'audio' | 'other',
-  ): Promise<File[]> {
+  ): Promise<{
+    pages: number;
+    files: Array<any>;
+  }> {
     try {
+      const deletedFilesCount = await this.prismaService.deletedFiles.count({
+        where: {
+          file: {
+            userId: userId,
+            ...(type && { type }),
+          },
+        },
+      });
+
+      const itemsPerPage = 24;
+      const pages =
+        deletedFilesCount === 0 ? 0 : Math.ceil(deletedFilesCount / 24);
+
       const files = await this.prismaService.file.findMany({
         where: {
           DeletedFiles: {
@@ -58,12 +69,16 @@ export class BinService {
             deletedAt: order,
           },
         },
+        skip: (page - 1) * itemsPerPage,
+        take: itemsPerPage,
       });
 
-      return files;
+      return { pages, files };
     } catch (error: any) {
-      console.error(error);
-      throw new InternalServerErrorException('Unexpected error happened!');
+      throw new HttpException(
+        error?.response?.message || "File doesn't exist",
+        error?.response?.statusCode || 500,
+      );
     }
   }
 
@@ -76,7 +91,6 @@ export class BinService {
         },
       });
     } catch (error: any) {
-      console.error(error);
       throw new HttpException(
         error?.response?.message || "File doesn't exist",
         error?.response?.statusCode || 500,

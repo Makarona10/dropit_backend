@@ -14,6 +14,57 @@ import path from 'path';
 export class FolderService {
   constructor(private prismaService: PrismaService) {}
 
+  async getUserMainFolderId(userId: string): Promise<number> {
+    try {
+      const row = await this.prismaService.folder.findFirst({
+        where: {
+          userId,
+        },
+        orderBy: {
+          id: 'asc',
+        },
+      });
+
+      if (!row) {
+        throw new BadRequestException('No folders found for this user!');
+      }
+
+      return row.id;
+    } catch (error) {
+      throw new HttpException(
+        error?.response?.message || 'Unexpected error happened!',
+        error?.response?.statusCode || 500,
+      );
+    }
+  }
+
+  async getUserFolders(userId: string, page: number) {
+    try {
+      const pageFoldersCount = 24;
+
+      const totalUserFolders = await this.prismaService.folder.count({
+        where: {
+          userId,
+        },
+      });
+      const pages = Math.ceil(totalUserFolders / pageFoldersCount);
+      const folders = await this.prismaService.folder.findMany({
+        where: {
+          userId,
+        },
+        skip: (page - 1) * pageFoldersCount,
+        take: pageFoldersCount,
+      });
+
+      return { folders, pages };
+    } catch (error) {
+      throw new HttpException(
+        error?.response?.message || 'Unexpected error happened!',
+        error?.response?.statusCode || 500,
+      );
+    }
+  }
+
   async isFolderExisting(folderId: number): Promise<boolean> {
     const path = await this.prismaService.folder.findFirst({
       where: {
@@ -84,7 +135,6 @@ export class FolderService {
 
       if (existed) throw new BadRequestException('Folder already exists!');
     } catch (error: any) {
-      console.error(error);
       throw new HttpException(
         error?.response?.message || 'Unexpected error happened!',
         error?.response?.statusCode || 500,
@@ -160,22 +210,86 @@ export class FolderService {
     }
   }
 
-  async getFolderContent(userId: string, folderId: number) {
+  async getFolderContent(userId: string, folderId: number, page: number) {
+    const itemsPerPage = 10;
+    if (page < 1)
+      throw new BadRequestException('Page should be a positive number');
+    if (!folderId || folderId < 0)
+      throw new BadRequestException('Invalid folderId!');
+
     try {
+      const filesCount = await this.prismaService.file.count({
+        where: {
+          userId,
+          FileParent: {
+            folderId,
+          },
+        },
+      });
+      const foldersCount = await this.prismaService.folder.count({
+        where: {
+          userId,
+          parentId: folderId,
+        },
+      });
+
+      const totalItems = filesCount > foldersCount ? filesCount : foldersCount;
+      const totalPages =
+        totalItems === 0 ? 0 : Math.ceil(totalItems / itemsPerPage);
+
       const files = await this.prismaService.file.findMany({
         where: {
           userId,
-          ...(folderId === 0 && { FileParent: { is: null } }),
-          ...(folderId !== 0 && { FileParent: { folderId } }),
+          FileParent: {
+            folderId,
+          },
           DeletedFiles: {
             is: null,
           },
         },
+        select: {
+          id: true,
+          name: true,
+          sizeInKb: true,
+          type: true,
+          extension: true,
+          createdAt: true,
+          userId: true,
+          Favourite: {
+            where: {
+              userId,
+            },
+            select: {
+              fileId: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        skip: (page - 1) * itemsPerPage,
+        take: itemsPerPage,
       });
 
-      return files;
+      const formattedFiles = files.map((file) => ({
+        ...file,
+        isFavourite: file.Favourite.length > 0,
+        Favourite: undefined,
+      }));
+
+      const folders = await this.prismaService.folder.findMany({
+        where: {
+          parentId: folderId,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        skip: (page - 1) * itemsPerPage,
+        take: itemsPerPage,
+      });
+
+      return { files: formattedFiles, folders, pages: totalPages };
     } catch (error: any) {
-      console.error(error);
       throw new HttpException(
         error?.response?.message || 'Unexpected error happened',
         error?.response?.statusCode || 500,

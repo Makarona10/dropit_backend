@@ -4,8 +4,12 @@ import {
   Injectable,
   InternalServerErrorException,
 } from '@nestjs/common';
-import { File, Tag } from '@prisma/client';
+import { File, Prisma, Tag } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+
+interface FileWithFavourite extends File {
+  isFavourite: boolean;
+}
 
 @Injectable()
 export class TagService {
@@ -36,7 +40,8 @@ export class TagService {
     tagId: number,
     orderBy: 'name' | 'createdAt',
     arrange: 'desc' | 'asc',
-  ): Promise<File[]> {
+    page: number,
+  ): Promise<any> {
     try {
       const tag = await this.prismaService.tag.findFirst({
         where: { id: tagId, userId },
@@ -44,20 +49,82 @@ export class TagService {
 
       if (!tag) throw new BadRequestException('Tag not found');
 
-      const files = await this.prismaService.$queryRaw<File[]>`
-        SELECT "File".* FROM "File" JOIN "FilesTags"
-        ON "FilesTags"."fileId" = "File"."id"
-        WHERE "FilesTags"."tagId" = ${tagId} AND "File"."userId" = ${userId}::uuid
-        ORDER BY "File"."${orderBy}" ${arrange.toUpperCase()}
-      `;
+      const filesCount: number = await this.prismaService.file.count({
+        where: {
+          userId,
+          FilesTags: {
+            some: {
+              tagId,
+            },
+          },
+        },
+      });
 
-      return files;
+      const pagesCount: number =
+        filesCount === 0 ? 0 : Math.ceil(filesCount / 24);
+
+      const files = await this.prismaService.$queryRaw<
+        FileWithFavourite[]
+      >(Prisma.sql`
+        SELECT 
+          "File".*,
+          CASE 
+            WHEN "Favourite"."fileId" IS NOT NULL THEN true 
+            ELSE false 
+          END AS "isFavourite"
+        FROM "File"
+        JOIN "FilesTags"
+          ON "FilesTags"."fileId" = "File"."id"
+        LEFT JOIN "Favourite"
+          ON "Favourite"."fileId" = "File"."id"
+          AND "Favourite"."userId" = ${userId}::uuid
+        WHERE "FilesTags"."tagId" = ${tagId} 
+          AND "File"."userId" = ${userId}::uuid
+        ORDER BY "File"."${Prisma.raw(orderBy)}" ${Prisma.raw(arrange.toUpperCase())}
+        OFFSET ${(page - 1) * 24}
+        LIMIT 24
+`);
+
+      return { pagesCount, files };
     } catch (error: any) {
       throw new HttpException(
         error?.response?.message || 'Error happened while retrieving files',
         error?.response?.statusCode || 500,
       );
     }
+  }
+
+  async addFileToTag(userId: string, fileId: number, tagId: number) {
+    if (!fileId && !tagId) {
+      throw new BadRequestException(
+        'Both file id and tag id must be provided!',
+      );
+    }
+
+    const file = await this.prismaService.file.findFirst({
+      where: {
+        userId,
+        id: fileId,
+      },
+    });
+
+    if (!file) throw new BadRequestException("File doesn't exist!");
+
+    const tag = await this.prismaService.tag.findFirst({
+      where: {
+        userId,
+        id: tagId,
+      },
+    });
+
+    if (!tag) throw new BadRequestException("Tag doesn't exist");
+
+    await this.prismaService.filesTags.create({
+      data: {
+        fileId,
+        tagId,
+      },
+    });
   }
 
   async addTag(userId: string, name: string) {
@@ -71,6 +138,11 @@ export class TagService {
 
       return;
     } catch (error) {
+      if (error.code === 'P2002') {
+        throw new BadRequestException(
+          'This file is already tagged with this tag1',
+        );
+      }
       throw new HttpException(
         error?.response?.message || 'Error happened while creating tag',
         error?.response?.statusCode || 500,
