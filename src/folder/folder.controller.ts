@@ -1,11 +1,11 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Delete,
   Get,
   Param,
   ParseIntPipe,
-  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -22,20 +22,29 @@ export class FolderController {
   constructor(private readonly folderService: FolderService) {}
 
   @UseGuards(JwtAuthGuard)
+  @Get('/')
+  async getUserFolders(
+    @Req() req: Request,
+    @Query('page', new ParseIntPipe()) page: number,
+  ) {
+    const user = req.user as { id: string; email: string };
+    const result = await this.folderService.getUserFolders(user.id, +page);
+    return resObj(200, 'Folders retrieved successfully', result);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('create')
   async createFolder(
     @Req() req: Request,
-    @Query('parentId', new ParseIntPipe()) parentId: string,
-    @Query('name') name: string,
+    @Body('parentId') parentId: number | null,
+    @Body('name') name: string,
   ) {
     if (!name || typeof name != 'string')
       throw new BadRequestException('Folder must have a name');
 
     const user = req.user as { id: string; email: string };
     await this.folderService.createFolder(user.id, +parentId, name);
-    return {
-      message: 'Folder created successfully',
-    };
+    return resObj(201, 'Folder created successfully', []);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -62,17 +71,18 @@ export class FolderController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('file-content')
-  /**
-   * If folderId = 0 -> API will return root directory files
-   *
-   * If folderId > 0 -> API will return the intended folder files
-   */
+  @Get('folder-content/:folderId')
   async getFolderContent(
     @Req() req: Request,
-    @Query('folderId', new ParseIntPipe()) folderId: number,
+    @Param('folderId', new ParseIntPipe()) folderId: number,
+    @Query('page', new ParseIntPipe()) page: number,
   ) {
     const user = req.user as { id: string; email: string };
-    return await this.folderService.getFolderContent(user.id, +folderId);
+    const result = await this.folderService.getFolderContent(
+      user.id,
+      +folderId,
+      page,
+    );
+    return resObj(200, 'Folder content retrieved successfully', result);
   }
 }

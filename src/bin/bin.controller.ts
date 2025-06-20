@@ -3,6 +3,7 @@ import {
   Delete,
   Get,
   NotImplementedException,
+  Param,
   ParseIntPipe,
   Post,
   Query,
@@ -19,23 +20,14 @@ export class BinController {
   constructor(private readonly binService: BinService) {}
 
   @UseGuards(JwtAuthGuard)
-  @Post('move-file-to-bin')
+  @Post('move-file-to-bin/:fileId')
   async moveFileToBin(
     @Req() req: Request,
-    @Query('fileId', new ParseIntPipe()) fileId: number,
+    @Param('fileId', new ParseIntPipe()) fileId: number,
   ) {
     const user = req.user as { id: string; email: string };
     await this.binService.moveFileToBin(user.id, fileId);
     return resObj(200, 'File moved to trash successfully', []);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post('move-folder-to-bin')
-  async moveFolderToBin(
-    @Req() req: Request,
-    @Query('folderId', new ParseIntPipe()) fileId: number,
-  ) {
-    throw new NotImplementedException('Not Implemented yet');
   }
 
   @UseGuards(JwtAuthGuard)
@@ -51,13 +43,15 @@ export class BinController {
   @Get('deleted-files')
   async getDeletedFiles(
     @Req() req: Request,
-    @Query('order_by_date') order: 'desc' | 'asc',
+    @Query('page') page: number,
+    @Query('order') order: 'desc' | 'asc',
     @Query('type')
     type: 'image' | 'video' | 'audio' | 'other',
   ) {
     const user = req.user as { id: string; email: string };
     const files = await this.binService.getDeletedFiles(
       user.id,
+      +page,
       order || 'desc',
       type,
     );
