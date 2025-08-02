@@ -9,10 +9,16 @@ import { PrismaService } from 'src/prisma/prisma.service';
 export class SearchService {
   constructor(private readonly prismaService: PrismaService) {}
 
-  async searchForFile(userId: string, fileName: string, page: number) {
+  async searchForFile(
+    userId: string,
+    fileName: string,
+    page: number,
+    order: 'desc' | 'asc',
+    fType: 'video' | 'image' | 'other' | 'audio',
+  ) {
     if (!fileName) throw new BadRequestException('Enter a valid file name');
 
-    const pageItems = 16;
+    const pageItems = 32;
 
     try {
       const filesCount = await this.prismaService.file.count({
@@ -23,6 +29,7 @@ export class SearchService {
           },
           userId,
           DeletedFiles: null,
+          ...(fType && { type: fType }),
         },
       });
 
@@ -36,10 +43,13 @@ export class SearchService {
           },
           userId,
           DeletedFiles: null,
+          ...(fType && { type: fType }),
         },
         select: {
           id: true,
           name: true,
+          userId: true,
+          type: true,
           Favourite: {
             select: {
               fileId: true,
@@ -54,10 +64,12 @@ export class SearchService {
               duration: true,
               fps: true,
               resolution: true,
+              thumbnail: true,
             },
           },
           Image: {
             select: {
+              thumbnail: true,
               resolution: true,
             },
           },
@@ -69,12 +81,16 @@ export class SearchService {
         },
         skip: (page - 1) * pageItems,
         take: pageItems,
+        orderBy: {
+          createdAt: order || 'desc',
+        },
       });
 
       const mappedFiles = files.map((f) => ({
         ...f,
         duration: f.Audio?.duration || f.Video?.duration,
         resolution: f.Video?.resolution || f.Image?.resolution,
+        thumbnail: f?.Image?.thumbnail || f?.Video?.thumbnail,
         fps: f.Video?.fps,
         isFavourite: !!f.Favourite.length,
         Favourite: undefined,

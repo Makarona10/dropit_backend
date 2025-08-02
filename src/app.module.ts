@@ -36,7 +36,12 @@ import { SearchModule } from './search/search.module';
     }),
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'uploads'),
-      serveRoot: '/uploads', // URL prefix (e.g., http://localhost:3000/uploads/filename.ext)
+      serveRoot: '/uploads',
+      // serveStaticOptions: {
+      //   setHeaders: (res, path, stat) => {
+      //     res.set('Cache-Control', 'public, max-age=31557600');
+      //   },
+      // },
     }),
     PrismaModule,
     AuthModule,

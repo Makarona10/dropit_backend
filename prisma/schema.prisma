@@ -75,12 +75,14 @@ model Video {
   resolution String @db.VarChar(64)
   duration   Int
   fps        Int
+  thumbnail  String @default("") @db.VarChar(2048)
 }
 
 model Image {
   imageId    Int    @id
   file       File   @relation(fields: [imageId], references: [id], onDelete: Cascade)
   resolution String @db.VarChar(64)
+  thumbnail  String @default("") @db.VarChar(2048)
 }
 
 model Favourite {
@@ -126,16 +128,15 @@ model FilesTags {
 }
 
 model Folder {
-  id         Int          @id @default(autoincrement())
-  name       String       @db.VarChar(128)
-  path       String       @db.Text
-  userId     String       @db.Uuid
-  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt  DateTime     @default(now())
-  FileParent FileParent[]
-
+  id             Int              @id @default(autoincrement())
+  name           String           @db.VarChar(128)
+  path           String           @db.Text
+  userId         String           @db.Uuid
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime         @default(now())
+  FileParent     FileParent[]
   parentId       Int?             @db.Integer
-  parent         Folder?          @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  parent         Folder?          @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
   children       Folder[]         @relation("FolderHierarchy")
   DeletedFolders DeletedFolders[]
 }
@@ -149,6 +150,6 @@ model FileParent {
 
 model DeletedFolders {
   folderId  Int      @id
-  folder    Folder   @relation(fields: [folderId], references: [id])
+  folder    Folder   @relation(fields: [folderId], references: [id], onDelete: Cascade)
   deletedAt DateTime @default(now())
 }

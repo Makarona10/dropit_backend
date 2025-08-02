@@ -22,9 +22,17 @@ export class SearchController {
     @Req() req: Request,
     @Param('name') name: string,
     @Query('page', new ParseIntPipe()) page: number,
+    @Query('order') order: 'asc' | 'desc',
+    @Query('type') fType: 'video' | 'image' | 'other' | 'audio',
   ) {
     const user = req.user as { id: string; email: string };
-    const result = await this.searchService.searchForFile(user.id, name, +page);
+    const result = await this.searchService.searchForFile(
+      user.id,
+      name,
+      +page,
+      order || 'desc',
+      fType,
+    );
 
     return resObj(200, 'Search result retrieved successfully', result);
   }

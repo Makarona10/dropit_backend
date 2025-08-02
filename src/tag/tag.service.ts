@@ -4,30 +4,36 @@ import {
   Injectable,
   InternalServerErrorException,
 } from '@nestjs/common';
-import { File, Prisma, Tag } from '@prisma/client';
+import { Tag } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
-
-interface FileWithFavourite extends File {
-  isFavourite: boolean;
-}
 
 @Injectable()
 export class TagService {
   constructor(private readonly prismaService: PrismaService) {}
 
-  async getUserTags(userId: string, page: number): Promise<Tag[]> {
-    const offset = (page - 1) * 20;
+  async getUserTags(
+    userId: string,
+    page: number,
+  ): Promise<{ tags: Tag[]; pages: number }> {
+    const offset = (page - 1) * 24;
 
     try {
+      const tagsCount = await this.prismaService.tag.count({
+        where: {
+          userId,
+        },
+      });
+
+      const pages = Math.ceil(tagsCount / 24);
       const tags = await this.prismaService.tag.findMany({
         where: {
           userId,
         },
         skip: offset,
-        take: 20,
+        take: 24,
       });
 
-      return tags;
+      return { tags, pages };
     } catch (error: any) {
       throw new InternalServerErrorException('Failed to load tags!', {
         description: error?.message,
@@ -41,6 +47,7 @@ export class TagService {
     orderBy: 'name' | 'createdAt',
     arrange: 'desc' | 'asc',
     page: number,
+    fileName?: string,
   ): Promise<any> {
     try {
       const tag = await this.prismaService.tag.findFirst({
@@ -57,35 +64,84 @@ export class TagService {
               tagId,
             },
           },
+          DeletedFiles: null,
+          ...(fileName && {
+            name: { contains: fileName, mode: 'insensitive' },
+          }),
         },
       });
 
       const pagesCount: number =
         filesCount === 0 ? 0 : Math.ceil(filesCount / 24);
 
-      const files = await this.prismaService.$queryRaw<
-        FileWithFavourite[]
-      >(Prisma.sql`
-        SELECT 
-          "File".*,
-          CASE 
-            WHEN "Favourite"."fileId" IS NOT NULL THEN true 
-            ELSE false 
-          END AS "isFavourite"
-        FROM "File"
-        JOIN "FilesTags"
-          ON "FilesTags"."fileId" = "File"."id"
-        LEFT JOIN "Favourite"
-          ON "Favourite"."fileId" = "File"."id"
-          AND "Favourite"."userId" = ${userId}::uuid
-        WHERE "FilesTags"."tagId" = ${tagId} 
-          AND "File"."userId" = ${userId}::uuid
-        ORDER BY "File"."${Prisma.raw(orderBy)}" ${Prisma.raw(arrange.toUpperCase())}
-        OFFSET ${(page - 1) * 24}
-        LIMIT 24
-`);
+      const files = await this.prismaService.file.findMany({
+        where: {
+          userId,
+          FilesTags: {
+            some: {
+              tagId,
+            },
+          },
+          DeletedFiles: null,
+          ...(fileName && {
+            name: { contains: fileName, mode: 'insensitive' },
+          }),
+        },
+        select: {
+          userId: true,
+          name: true,
+          id: true,
+          createdAt: true,
+          extension: true,
+          sizeInKb: true,
+          type: true,
+          uniqueName: true,
+          Favourite: {
+            select: {
+              fileId: true,
+            },
+          },
+          Audio: {
+            select: {
+              duration: true,
+            },
+          },
+          Image: {
+            select: {
+              resolution: true,
+              thumbnail: true,
+            },
+          },
+          Video: {
+            select: {
+              thumbnail: true,
+              fps: true,
+              resolution: true,
+              duration: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: arrange,
+        },
+        skip: (page - 1) * 24,
+        take: 24,
+      });
 
-      return { pagesCount, files };
+      const finalFiles = files.map((f) => ({
+        ...f,
+        duration: f.Audio?.duration || f.Video?.duration,
+        resolution: f.Video?.resolution || f.Image?.resolution,
+        thumbnail: f.Image?.thumbnail || f.Video?.thumbnail,
+        fps: f.Video?.fps,
+        isFavourite: !!f.Favourite.length,
+        Favourite: undefined,
+        Audio: undefined,
+        Video: undefined,
+        Image: undefined,
+      }));
+
+      return { pagesCount, files: finalFiles };
     } catch (error: any) {
       throw new HttpException(
         error?.response?.message || 'Error happened while retrieving files',
@@ -127,6 +183,29 @@ export class TagService {
     });
   }
 
+  async removeFileFromTag(userId: string, fileId: number, tagId: number) {
+    if (!fileId && !tagId) {
+      throw new BadRequestException(
+        'Both file id and tag id must be provided!',
+      );
+    }
+
+    const file = await this.prismaService.filesTags.delete({
+      where: {
+        fileId_tagId: {
+          fileId,
+          tagId,
+        },
+        file: {
+          userId,
+        },
+      },
+    });
+
+    if (!file) throw new BadRequestException("File doesn't exist!");
+
+    return Promise.resolve();
+  }
   async addTag(userId: string, name: string) {
     try {
       await this.prismaService.tag.create({

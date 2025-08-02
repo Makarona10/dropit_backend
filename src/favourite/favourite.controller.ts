@@ -21,6 +21,29 @@ export class FavouriteController {
   constructor(private readonly favouriteService: FavouriteService) {}
 
   @UseGuards(JwtAuthGuard)
+  @Get('get-favourite')
+  async getFavouriteFiles(
+    @Req() req: Request,
+    @Query('order') order: 'asc' | 'desc' | null,
+    @Query('sortBy') sortBy: 'name' | 'extension' | 'sizeInKb' | 'createdAt',
+    @Query('type') type: 'image' | 'video' | 'audio' | 'other',
+    @Query('page') page: number,
+  ) {
+    if (+page < 1)
+      return new BadRequestException('page number must me greater than 0');
+    const user = req.user as { id: string; email: string };
+    const _page: number = page ? page : 1;
+    const result = await this.favouriteService.getFavouriteFiles(user.id, {
+      order,
+      sortBy,
+      type,
+      page: _page,
+    });
+
+    return resObj(200, 'Favourite files retrieved successfully', result);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('add-file')
   async addFileToFavourites(
     @Req() req: Request,
@@ -74,5 +97,31 @@ export class FavouriteController {
     @Query('folderId', new ParseIntPipe()) folderId: number,
   ) {
     throw new NotImplementedException('Coming soon...');
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('get-favourite-videos')
+  async getFavouriteVideos(
+    @Req() req: Request,
+    @Query('order') order: 'asc' | 'desc',
+    @Query('sortBy') sortBy: 'name' | 'sizeInKb' | 'createdAt' | 'extension',
+    @Query('extension') extension: string,
+    @Query('duration') duration: number,
+    @Query('page') page: number,
+  ) {
+    if (+page < 1)
+      return new BadRequestException('page number must me greater than 0');
+
+    const user = req.user as { id: string; email: string };
+    const result = await this.favouriteService.getFavouriteVideos(
+      user.id,
+      order,
+      extension,
+      sortBy,
+      duration,
+      page,
+    );
+
+    return resObj(200, 'Favourite videos retrieved successfully', result);
   }
 }

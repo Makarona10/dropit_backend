@@ -48,10 +48,10 @@ export class FolderController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Delete('delete')
+  @Delete('delete/:folderId')
   async deleteFolder(
     @Req() req: Request,
-    @Query('folderId', new ParseIntPipe()) folderId: number,
+    @Param('folderId', new ParseIntPipe()) folderId: number,
   ) {
     const user = req.user as { id: string; email: string };
     await this.folderService.deleteFolder(user.id, +folderId);
