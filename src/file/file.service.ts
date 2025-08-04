@@ -231,6 +231,13 @@ export class FileService {
           type: 'video',
           extension: extension ? extension.toLowerCase() : undefined,
           DeletedFiles: null,
+          ...(duration && {
+            Video: {
+              duration: {
+                gte: +duration,
+              },
+            },
+          }),
         },
       });
 

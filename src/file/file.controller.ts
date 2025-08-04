@@ -41,7 +41,6 @@ export class FileController {
     @Query('parentId') parentId: number,
   ) {
     const user = req.user as { id: string; email: string };
-
     const fixedFiles = files.map((f) => {
       const correctedName = Buffer.from(f.originalname, 'latin1').toString(
         'utf8',
