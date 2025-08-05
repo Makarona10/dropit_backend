@@ -97,9 +97,9 @@ export class FavouriteService {
 
       const theFiles = files.map((file) => ({
         ...file,
-        resolution: file.Image?.resolution,
+        resolution: file.Image?.resolution || file.Video?.resolution,
         fps: file.Video?.fps,
-        duration: file.Audio?.duration,
+        duration: file.Audio?.duration || file.Video?.duration,
         thumbnail: file.Image?.thumbnail || file.Video?.thumbnail,
         isFavourite: true,
       }));

@@ -7,6 +7,8 @@ export class UserService {
   constructor(private readonly prisma: PrismaService) {}
 
   async createUser(user: User, hash: string) {
+    const exists = await this.findUser(user.email);
+    if (exists) throw new BadRequestException('Email already in use');
     return this.prisma.$transaction(async (tx) => {
       const _user = await tx.user.create({
         data: { ...user, passwords: { create: { hash } } },
