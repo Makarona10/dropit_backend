@@ -19,6 +19,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { join } from 'path';
 import { SearchModule } from './search/search.module';
+import { ShareModule } from './share/share.module';
 
 @Module({
   imports: [
@@ -29,7 +30,7 @@ import { SearchModule } from './search/search.module';
     ThrottlerModule.forRoot({
       throttlers: [
         {
-          ttl: 60000,
+          ttl: 1000 * 60 * 60,
           limit: 50,
         },
       ],
@@ -37,11 +38,6 @@ import { SearchModule } from './search/search.module';
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'uploads'),
       serveRoot: '/uploads',
-      // serveStaticOptions: {
-      //   setHeaders: (res, path, stat) => {
-      //     res.set('Cache-Control', 'public, max-age=31557600');
-      //   },
-      // },
     }),
     PrismaModule,
     AuthModule,
@@ -54,6 +50,7 @@ import { SearchModule } from './search/search.module';
     FavouriteModule,
     BinModule,
     SearchModule,
+    ShareModule,
   ],
   controllers: [AppController],
   providers: [

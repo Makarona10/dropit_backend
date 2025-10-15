@@ -9,10 +9,16 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import fs from 'fs/promises';
 import path from 'path';
 import { Prisma } from '@prisma/client';
+import { WinstonLogger } from 'src/logger/winston.logger';
+
+const PAGEFOLDERSCOUNT = 24;
 
 @Injectable()
 export class FolderService {
-  constructor(private prismaService: PrismaService) {}
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly logger: WinstonLogger,
+  ) {}
 
   async getUserMainFolderId(userId: string): Promise<number> {
     try {
@@ -40,14 +46,12 @@ export class FolderService {
 
   async getUserFolders(userId: string, page: number) {
     try {
-      const pageFoldersCount = 24;
-
       const totalUserFolders = await this.prismaService.folder.count({
         where: {
           userId,
         },
       });
-      const pages = Math.ceil(totalUserFolders / pageFoldersCount);
+      const pages = Math.ceil(totalUserFolders / PAGEFOLDERSCOUNT);
       const folders = await this.prismaService.folder.findMany({
         where: {
           userId,
@@ -59,8 +63,8 @@ export class FolderService {
         orderBy: {
           createdAt: 'desc',
         },
-        skip: (page - 1) * pageFoldersCount,
-        take: pageFoldersCount,
+        skip: (page - 1) * PAGEFOLDERSCOUNT,
+        take: PAGEFOLDERSCOUNT,
       });
 
       return { folders, pages };
@@ -72,10 +76,11 @@ export class FolderService {
     }
   }
 
-  async isFolderExisting(folderId: number): Promise<boolean> {
+  async isFolderExisting(userId: string, folderId: number): Promise<boolean> {
     const path = await this.prismaService.folder.findFirst({
       where: {
         id: folderId,
+        userId,
       },
       select: {
         path: true,
@@ -419,6 +424,74 @@ export class FolderService {
       });
 
       return { files: formattedFiles, folders, pages: totalPages };
+    } catch (error: any) {
+      throw new HttpException(
+        error?.response?.message || 'Unexpected error happened',
+        error?.response?.statusCode || 500,
+      );
+    }
+  }
+
+  async getSharedFolders(
+    sharedWithId: string,
+    page: number,
+    order: 'desc' | 'asc',
+    name: string,
+  ) {
+    if (page < 1)
+      throw new BadRequestException('Page should be a positive number');
+    const where: any = {
+      sharedWithId,
+      folder: {
+        ...(name && { name: { contains: name, mode: 'insensitive' } }),
+        DeletedFolders: null,
+      },
+    };
+    try {
+      const foldersCount = await this.prismaService.share.count({
+        where,
+      });
+      const totalPages = Math.ceil(foldersCount / PAGEFOLDERSCOUNT);
+      const folders = await this.prismaService.share.findMany({
+        where,
+        orderBy: {
+          createdAt: order || 'desc',
+        },
+        select: {
+          folder: {
+            select: {
+              id: true,
+              name: true,
+              createdAt: true,
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+        skip: (page - 1) * PAGEFOLDERSCOUNT,
+        take: PAGEFOLDERSCOUNT,
+      });
+
+      const mappedResult = folders.map((folder) => {
+        return {
+          id: folder.folder.id,
+          name: folder.folder.name,
+          createdAt: folder.folder.createdAt,
+          type: 'folder',
+          user: {
+            firstName: folder.folder.user.firstName,
+            lastName: folder.folder.user.lastName,
+            email: folder.folder.user.email,
+          },
+        };
+      });
+
+      return { data: mappedResult, pages: totalPages };
     } catch (error: any) {
       throw new HttpException(
         error?.response?.message || 'Unexpected error happened',

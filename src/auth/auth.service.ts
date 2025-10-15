@@ -6,6 +6,7 @@ import { UserService } from 'src/user/user.service';
 import * as argon from 'argon2';
 import { Response } from 'express';
 import { Payload } from './interfaces/payload.interface';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class AuthService {
@@ -14,20 +15,29 @@ export class AuthService {
     private readonly passwordService: PasswordService,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
+    private readonly configService: ConfigService,
   ) {}
 
   async generateTokens(payload: Payload) {
     return {
-      access_token: await this.jwtService.signAsync(payload),
+      access_token: await this.jwtService.signAsync(payload, {
+        secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
+        expiresIn: this.configService.get<string>('JWT_ACCESS_EXPIRATION'),
+      }),
       refresh_token: await this.jwtService.signAsync(payload, {
-        expiresIn: process.env.JWT_REFRESH_EXPIRATION,
-        secret: process.env.JWT_REFRESH_SECRET,
+        expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRATION'),
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       }),
     };
   }
 
   async decodeToken(token: string) {
-    return this.jwtService.verifyAsync(token);
+    try {
+      const user = await this.jwtService.verifyAsync(token, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      });
+      return user;
+    } catch (error) {}
   }
 
   async validateRefreshToken(userId: number, refreshToken: string) {
@@ -36,12 +46,14 @@ export class AuthService {
     );
     if (!storedToken) return false;
 
-    return argon.verify(storedToken, refreshToken, {
+    const isValid = await argon.verify(storedToken, refreshToken, {
       secret: Buffer.from(process.env.JWT_REFRESH_HASH_SECRET, 'base64'),
     });
+
+    return isValid;
   }
 
-  async revokeToken(userId: number) {
+  async revokeToken(userId: string) {
     await this.redisService.deleteKey(`refresh_token:${userId}`);
   }
 

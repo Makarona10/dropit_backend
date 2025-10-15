@@ -1,4 +1,9 @@
-import { BadRequestException, HttpException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { User } from './interfaces/user.interface';
 
@@ -28,6 +33,12 @@ export class UserService {
   async findUser(email: string) {
     return this.prisma.user.findUnique({
       where: { email },
+    });
+  }
+
+  async findUserById(id: string) {
+    return this.prisma.user.findUnique({
+      where: { id },
     });
   }
 
@@ -139,6 +150,27 @@ export class UserService {
         error?.response?.message || 'unexpected error happened!',
         error?.response?.statusCode || 500,
       );
+    }
+  }
+
+  async findUsersByEmail(email: string) {
+    try {
+      return this.prisma.user.findMany({
+        where: {
+          email: {
+            contains: email,
+            mode: 'insensitive',
+          },
+        },
+        select: {
+          email: true,
+          firstName: true,
+          lastName: true,
+        },
+        take: 5,
+      });
+    } catch (error) {
+      throw new InternalServerErrorException('Error happed while searching');
     }
   }
 }

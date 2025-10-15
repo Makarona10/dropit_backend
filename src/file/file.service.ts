@@ -3,7 +3,6 @@ import {
   HttpException,
   Injectable,
   InternalServerErrorException,
-  NotImplementedException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import fs from 'fs';
@@ -15,9 +14,12 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
 import ffprobeStatic from 'ffprobe-static';
 import { StorageQuotaService } from 'src/storage-quota/storage-quota.service';
+import { WinstonLogger } from 'src/logger/winston.logger';
 const Ffmpeg = ffmpeg;
 ffmpeg.setFfmpegPath(ffmpegStatic as string);
 ffmpeg.setFfprobePath(ffprobeStatic.path);
+
+const fileOrder = ['sizeInKb', 'extension', 'name'];
 
 @Injectable()
 export class FileService {
@@ -25,7 +27,30 @@ export class FileService {
     private readonly prismaService: PrismaService,
     private readonly folderService: FolderService,
     private readonly QuotaService: StorageQuotaService,
+    private readonly logger: WinstonLogger,
   ) {}
+
+  sharedItemsPerPage: number = 15;
+
+  async haveAccessToFile(userId: string, fileId: number) {
+    const file = await this.prismaService.file.findFirst({
+      where: {
+        id: fileId,
+        userId,
+      },
+    });
+    if (file) return true;
+
+    const sharedFile = await this.prismaService.share.findFirst({
+      where: {
+        fileId,
+        sharedWithId: userId,
+      },
+    });
+    if (sharedFile) return true;
+
+    return false;
+  }
 
   async getFile(userId: string, fileId: number) {
     if (!fileId || fileId < 1) {
@@ -38,7 +63,6 @@ export class FileService {
           userId,
           id: fileId,
         },
-
         select: {
           id: true,
           createdAt: true,
@@ -115,9 +139,9 @@ export class FileService {
       return finalFile;
     } catch (error) {
       throw new HttpException(
-        error?.response?.data?.message ||
+        error?.response?.message ||
           'Error happened while retrieving file from DB',
-        error?.response?.data?.statusCode || 500,
+        error?.response?.statusCode || 500,
       );
     }
   }
@@ -195,7 +219,6 @@ export class FileService {
           name: {
             not: 'main',
           },
-          DeletedFolders: { none: {} },
         },
         orderBy: {
           createdAt: 'desc',
@@ -401,7 +424,6 @@ export class FileService {
     }
   }
   async getFileParentDirectory(fileId: number, userId: string) {
-    // returns the complete path starting from root
     const userUploadsPath = path.join(__dirname, '../../uploads', userId);
     const fileParent = await this.prismaService.$queryRaw<
       Array<{ path: string; name: string }>
@@ -525,7 +547,6 @@ export class FileService {
     });
   }
 
-  // save the file and its parent to fileParent table
   async saveFileAndParent(parentId: number, fileId: number): Promise<any> {
     return await this.prismaService.fileParent.create({
       data: {
@@ -539,13 +560,11 @@ export class FileService {
     filePath: string,
     type: string,
   ): Promise<{ width: number; height: number }> {
-    // Determine file type based on extension
     const fileExtension = filePath.split('.').pop()?.toLowerCase();
     if (!fileExtension) {
       throw new BadRequestException('File has no extension');
     }
 
-    // Handle video files
     if (type === 'video') {
       return new Promise((resolve, reject) => {
         Ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -557,7 +576,6 @@ export class FileService {
             );
           }
 
-          // Find the video stream
           const videoStream = metadata.streams.find(
             (stream: any) => stream.codec_type === 'video',
           );
@@ -567,7 +585,6 @@ export class FileService {
             );
           }
 
-          // Extract width and height
           const width = videoStream.width;
           const height = videoStream.height;
 
@@ -846,12 +863,11 @@ export class FileService {
     }
   }
 
-  async downloadFile(userId: string, fileId: number) {
+  async downloadFile(fileId: number) {
     try {
       const file = await this.prismaService.file.findFirst({
         where: {
           id: fileId,
-          userId,
         },
         select: {
           id: true,
@@ -876,7 +892,7 @@ export class FileService {
 
       if (!file) throw new BadRequestException('File not found!');
 
-      const folderPath = await this.getFileParentDirectory(fileId, userId);
+      const folderPath = await this.getFileParentDirectory(fileId, file.userId);
       const filePath = path.join(folderPath || '', file.uniqueName || '');
       try {
         await fsPromise.access(filePath);
@@ -899,10 +915,6 @@ export class FileService {
         error?.response?.statusCode || 500,
       );
     }
-  }
-
-  async shareFile() {
-    return new NotImplementedException('Coming soon ...');
   }
 
   private async generateImageThumbnail(
@@ -962,5 +974,371 @@ export class FileService {
           reject(new Error(`FFmpeg thumbnail error: ${err.message}`)),
         );
     });
+  }
+
+  async getSharedFiles({ userId, order, type, page = 1, ownerEmail, name }) {
+    const where: any = {
+      sharedWithId: userId,
+      file: {
+        DeletedFiles: null,
+        ...(type && { type }),
+        ...(ownerEmail && { user: { email: ownerEmail } }),
+        ...(name && { name: { contains: name, mode: 'insensitive' } }),
+      },
+    };
+    try {
+      const result = await this.prismaService.share.findMany({
+        where: where,
+        orderBy: {
+          createdAt: order || 'desc',
+        },
+        select: {
+          file: {
+            select: {
+              id: true,
+              name: true,
+              sizeInKb: true,
+              extension: true,
+              type: true,
+              Video: {
+                select: {
+                  thumbnail: true,
+                },
+              },
+              Image: {
+                select: {
+                  thumbnail: true,
+                },
+              },
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+        take: this.sharedItemsPerPage,
+        skip: (page - 1) * this.sharedItemsPerPage,
+      });
+
+      const count = await this.prismaService.share.count({
+        where,
+      });
+
+      const mappedResult = result.map((file) => ({
+        name: file.file.name,
+        sizeInKb: file.file.sizeInKb,
+        extension: file.file.extension,
+        type: file.file.type,
+        thumbnail: file.file?.Video?.thumbnail || file.file?.Image?.thumbnail,
+        user: {
+          firstName: file.file.user.firstName,
+          lastName: file.file.user.lastName,
+          email: file.file.user.email,
+        },
+      }));
+
+      return {
+        data: mappedResult,
+        pages: Math.ceil(count / this.sharedItemsPerPage),
+      };
+    } catch (error: any) {
+      throw new InternalServerErrorException('Failed to get shared files');
+    }
+  }
+
+  async getSharedVideos({
+    userId,
+    order,
+    extension,
+    page = 1,
+    ownerEmail,
+    name,
+    duration,
+    sizeInKb,
+    sortBy,
+  }) {
+    const where: any = {
+      sharedWithId: userId,
+      file: {
+        type: 'video',
+        DeletedFiles: null,
+        ...(extension && { extension }),
+        ...(sizeInKb && { sizeInKb: { gte: +sizeInKb } }),
+        ...(ownerEmail && { user: { email: ownerEmail } }),
+        ...(name && { name: { contains: name, mode: 'insensitive' } }),
+        ...(duration && { Video: { duration: { gte: +duration } } }),
+      },
+    };
+    try {
+      const result = await this.prismaService.share.findMany({
+        where,
+        orderBy: {
+          ...(fileOrder.includes(sortBy)
+            ? {
+                file: {
+                  [sortBy]: order || 'desc',
+                },
+              }
+            : {
+                createdAt: order || 'desc',
+              }),
+        },
+        select: {
+          file: {
+            select: {
+              id: true,
+              name: true,
+              sizeInKb: true,
+              extension: true,
+              type: true,
+              Video: {
+                select: {
+                  duration: true,
+                  fps: true,
+                  resolution: true,
+                  thumbnail: true,
+                },
+              },
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+        take: this.sharedItemsPerPage,
+        skip: (page - 1) * this.sharedItemsPerPage,
+      });
+
+      const count = await this.prismaService.share.count({
+        where,
+      });
+
+      const mappedResult = result.map((file) => ({
+        id: file.file.id,
+        name: file.file.name,
+        sizeInKb: file.file.sizeInKb,
+        extension: file.file.extension,
+        type: file.file.type,
+        duration: file.file.Video.duration,
+        fps: file.file.Video.fps,
+        resolution: file.file.Video.resolution,
+        thumbnail: file.file.Video.thumbnail,
+        user: {
+          firstName: file.file.user.firstName,
+          lastName: file.file.user.lastName,
+          email: file.file.user.email,
+        },
+      }));
+
+      return {
+        data: mappedResult,
+        pages: Math.ceil(count / this.sharedItemsPerPage),
+      };
+    } catch (error: any) {
+      throw new InternalServerErrorException('Failed to get shared videos');
+    }
+  }
+
+  async getSharedImages({
+    userId,
+    order,
+    extension,
+    page = 1,
+    ownerEmail,
+    name,
+    sizeInKb,
+    sortBy,
+  }: {
+    userId: string;
+    order: 'asc' | 'desc';
+    extension: string;
+    page: number;
+    ownerEmail: string;
+    name: string;
+    sizeInKb: number;
+    sortBy: 'name' | 'createdAt' | 'extension' | 'sizeInKb';
+  }) {
+    const where: any = {
+      sharedWithId: userId,
+      file: {
+        type: 'image',
+        DeletedFiles: null,
+        ...(extension && { extension }),
+        ...(sizeInKb && { sizeInKb: { gte: +sizeInKb } }),
+        ...(ownerEmail && { user: { email: ownerEmail } }),
+        ...(name && { name: { contains: name, mode: 'insensitive' } }),
+      },
+    };
+    try {
+      const result = await this.prismaService.share.findMany({
+        where,
+        orderBy: {
+          ...(fileOrder.includes(sortBy)
+            ? {
+                file: {
+                  [sortBy]: order || 'desc',
+                },
+              }
+            : {
+                createdAt: order || 'desc',
+              }),
+        },
+        select: {
+          createdAt: true,
+          file: {
+            select: {
+              id: true,
+              name: true,
+              sizeInKb: true,
+              extension: true,
+              type: true,
+              Image: {
+                select: {
+                  resolution: true,
+                  thumbnail: true,
+                },
+              },
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+        take: this.sharedItemsPerPage,
+        skip: (page - 1) * this.sharedItemsPerPage,
+      });
+
+      const mappedResult = result.map((file) => ({
+        id: file.file.id,
+        name: file.file.name,
+        sizeInKb: file.file.sizeInKb,
+        extension: file.file.extension,
+        type: file.file.type,
+        resolution: file.file.Image.resolution,
+        thumbnail: file.file.Image.thumbnail,
+        user: {
+          firstName: file.file.user.firstName,
+          lastName: file.file.user.lastName,
+          email: file.file.user.email,
+        },
+      }));
+
+      const count = await this.prismaService.share.count({
+        where,
+      });
+
+      return {
+        data: mappedResult,
+        pages: Math.ceil(count / this.sharedItemsPerPage),
+      };
+    } catch (error: any) {
+      throw new InternalServerErrorException('Failed to get shared images');
+    }
+  }
+
+  async getSharedFile(sharedWithId: string, fileId: number) {
+    try {
+      const where: any = {
+        sharedWithId,
+        file: {
+          id: fileId,
+        },
+      };
+      const result = await this.prismaService.share.findFirst({
+        where,
+        select: {
+          file: {
+            select: {
+              id: true,
+              name: true,
+              sizeInKb: true,
+              type: true,
+              extension: true,
+              uniqueName: true,
+              userId: true,
+              Audio: {
+                select: {
+                  duration: true,
+                },
+              },
+              Video: {
+                select: {
+                  duration: true,
+                  fps: true,
+                  resolution: true,
+                },
+              },
+              Image: {
+                select: {
+                  resolution: true,
+                  thumbnail: true,
+                },
+              },
+              FileParent: {
+                select: {
+                  folder: {
+                    select: {
+                      path: true,
+                      name: true,
+                    },
+                  },
+                },
+              },
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const parentPath = result?.file?.FileParent?.folder?.path;
+      const parentName = result?.file?.FileParent?.folder?.name;
+      let filePath: string = path.join(parentPath || '', parentName || '');
+
+      if (!parentName && !parentName) {
+        filePath = 'main';
+      }
+      if (!result) throw new BadRequestException('Shared file not found');
+      const mappedResult = {
+        id: result.file.id,
+        name: result.file.name,
+        sizeInKb: result.file.sizeInKb,
+        extension: result.file.extension,
+        type: result.file.type,
+        uniqueName: result.file.uniqueName,
+        userId: result.file.userId,
+        user: {
+          firstName: result.file.user.firstName,
+          lastName: result.file.user.lastName,
+          email: result.file.user.email,
+        },
+        path: filePath,
+        duration: result.file.Audio?.duration,
+        fps: result.file.Video?.fps,
+        resolution:
+          result.file.Video?.resolution || result.file.Image?.resolution,
+        thumbnail: result.file.Image?.thumbnail,
+      };
+      return mappedResult;
+    } catch (error: any) {
+      throw new InternalServerErrorException('Failed to get shared file');
+    }
   }
 }

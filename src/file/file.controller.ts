@@ -1,11 +1,10 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpException,
-  NotImplementedException,
   Param,
   ParseIntPipe,
   Patch,
@@ -65,14 +64,13 @@ export class FileController {
       );
     }
 
-    return resObj(201, 'Video uploaded successfully!', []);
+    return resObj(201, 'Files uploaded successfully!', []);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('get-file/:fileId')
   async getFile(@Req() req: Request, @Param('fileId') fileId: number) {
     const user = req.user as { id: string; email: string };
-
     const result = await this.fileService.getFile(user.id, +fileId);
     return resObj(200, 'File retrieved successfully', result);
   }
@@ -81,7 +79,6 @@ export class FileController {
   @Get('recently-uploaded/')
   async getRecentUserFilesAndFolders(@Req() req: Request) {
     const user = req.user as { id: string; email: string };
-
     const result = await this.fileService.getRecentUserFilesAndFolders(user.id);
     return resObj(200, 'Files and folders retrieved successfully', result);
   }
@@ -161,18 +158,26 @@ export class FileController {
   async downloadFile(
     @Req() req: Request,
     @Param('fileId', new ParseIntPipe()) fileId: number,
-    @Response() res: Res,
+    @Response({ passthrough: false }) res: Res,
   ) {
     const user = req.user as { id: string; email: string };
+    const haveAccess = await this.fileService.haveAccessToFile(
+      user.id,
+      +fileId,
+    );
+    if (!haveAccess) {
+      throw new ForbiddenException('You do not have access to this file');
+    }
     try {
       const { stream, stats, fileName, extension } =
-        await this.fileService.downloadFile(user.id, fileId);
+        await this.fileService.downloadFile(+fileId);
       const contentType = mime.lookup(extension) || 'application/octet-stream';
       const correctedName = Buffer.from(fileName, 'latin1').toString('utf8');
       res.set({
         'Content-Type': contentType,
         'Content-Disposition': `attachment; filename=${correctedName}`,
         'Content-Length': stats.size,
+        'Accept-Ranges': 'bytes', // Allows partial downloads
       });
       res.status(200);
 
@@ -198,22 +203,94 @@ export class FileController {
       });
     } catch (error: any) {
       throw new HttpException(
-        error?.response?.message ||
-          error?.message ||
+        error.message ||
           'Error happened while downloading the file, try again in a minute',
-        error?.response?.statusCode || 500,
+        error?.status || 500,
       );
     }
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('share')
-  async shareFile(
+  @Get('shared/shared-files')
+  async getSharedFiles(
     @Req() req: Request,
-    @Query('fileId', new ParseIntPipe()) fileId: number,
+    @Query('name') name: string,
+    @Query('type') type: 'image' | 'video' | 'audio' | 'other',
+    @Query('ownerEmail') ownerEmail: number,
+    @Query('order') order: string,
+    @Query('page') page: number,
   ) {
-    throw new NotImplementedException('Coming soon...');
     const user = req.user as { id: string; email: string };
-    return this.fileService.shareFile();
+    const result = await this.fileService.getSharedFiles({
+      userId: user.id,
+      name,
+      type,
+      ownerEmail,
+      order,
+      page,
+    });
+    return resObj(200, 'Shared files retrieved successfully', result);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('shared/videos')
+  async getShareVideos(
+    @Req() req: Request,
+    @Query('name') name: string,
+    @Query('ownerEmail') ownerEmail: number,
+    @Query('order') order: string,
+    @Query('sortBy') sortBy: string,
+    @Query('page') page: number,
+    @Query('extension') extension: string,
+    @Query('duration') duration: number,
+    @Query('sizeInKb') sizeInKb: number,
+  ) {
+    const user = req.user as { id: string; email: string };
+    const result = await this.fileService.getSharedVideos({
+      userId: user.id,
+      name,
+      ownerEmail,
+      order,
+      page,
+      sizeInKb,
+      duration,
+      extension,
+      sortBy,
+    });
+    return resObj(200, 'Shared videos retrieved successfully', result);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('shared/images')
+  async getShareImages(
+    @Req() req: Request,
+    @Query('name') name: string,
+    @Query('ownerEmail') ownerEmail: string,
+    @Query('order') order: 'asc' | 'desc',
+    @Query('page') page: number,
+    @Query('sortBy') sortBy: 'name' | 'createdAt' | 'extension' | 'sizeInKb',
+    @Query('extension') extension: string,
+    @Query('sizeInKb') sizeInKb: number,
+  ) {
+    const user = req.user as { id: string; email: string };
+    const result = await this.fileService.getSharedImages({
+      userId: user.id,
+      name,
+      extension,
+      sizeInKb: +sizeInKb,
+      ownerEmail,
+      order: order || 'desc',
+      page: +page || 1,
+      sortBy: sortBy || 'createdAt',
+    });
+    return resObj(200, 'Shared images retrieved successfully', result);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('shared/get-file/:fileId')
+  async getSharedFile(@Req() req: Request, @Param('fileId') fileId: number) {
+    const user = req.user as { id: string; email: string };
+    const result = await this.fileService.getSharedFile(user.id, +fileId);
+    return resObj(200, 'Shared file retrieved successfully', result);
   }
 }

@@ -85,4 +85,22 @@ export class FolderController {
     );
     return resObj(200, 'Folder content retrieved successfully', result);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('shared-folders')
+  async getSharedFolders(
+    @Req() req: Request,
+    @Query('page', new ParseIntPipe()) page: number,
+    @Query('order') order: 'desc' | 'asc',
+    @Query('name') name: string,
+  ) {
+    const user = req.user as { id: string; email: string };
+    const result = await this.folderService.getSharedFolders(
+      user.id,
+      +page || 1,
+      order || 'desc',
+      name,
+    );
+    return resObj(200, 'Shared folders retrieved successfully', result);
+  }
 }

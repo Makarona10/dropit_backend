@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 export class RefreshTokenRateLimitMiddleware implements NestMiddleware {
   private limiter = rateLimit({
     windowMs: 30 * 1000,
-    max: 1,
+    max: 10,
     message: 'Too many refresh attempts, please wait before trying again.',
     keyGenerator: (req: Request) => req.cookies['refreshToken'] || req.ip,
   });
