@@ -976,7 +976,15 @@ export class FileService {
     });
   }
 
-  async getSharedFiles({ userId, order, type, page = 1, ownerEmail, name }) {
+  async getSharedFiles({
+    userId,
+    order,
+    type,
+    page = 1,
+    ownerEmail,
+    name,
+    sortBy = 'createdAt',
+  }) {
     const where: any = {
       sharedWithId: userId,
       file: {
@@ -990,7 +998,15 @@ export class FileService {
       const result = await this.prismaService.share.findMany({
         where: where,
         orderBy: {
-          createdAt: order || 'desc',
+          ...(fileOrder.includes(sortBy)
+            ? {
+                file: {
+                  [sortBy]: order || 'desc',
+                },
+              }
+            : {
+                createdAt: order || 'desc',
+              }),
         },
         select: {
           file: {
@@ -1029,6 +1045,7 @@ export class FileService {
       });
 
       const mappedResult = result.map((file) => ({
+        id: file.file.id,
         name: file.file.name,
         sizeInKb: file.file.sizeInKb,
         extension: file.file.extension,

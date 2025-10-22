@@ -212,23 +212,25 @@ export class FileController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('shared/shared-files')
+  @Get('shared/files')
   async getSharedFiles(
     @Req() req: Request,
     @Query('name') name: string,
-    @Query('type') type: 'image' | 'video' | 'audio' | 'other',
     @Query('ownerEmail') ownerEmail: number,
     @Query('order') order: string,
+    @Query('sortBy') sortBy: string,
     @Query('page') page: number,
+    @Query('type') type: string,
   ) {
     const user = req.user as { id: string; email: string };
     const result = await this.fileService.getSharedFiles({
       userId: user.id,
       name,
-      type,
       ownerEmail,
       order,
       page,
+      type,
+      sortBy,
     });
     return resObj(200, 'Shared files retrieved successfully', result);
   }
