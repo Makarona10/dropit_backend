@@ -44,6 +44,7 @@ export class FileController {
       const correctedName = Buffer.from(f.originalname, 'latin1').toString(
         'utf8',
       );
+
       return { ...f, originalname: correctedName };
     });
 

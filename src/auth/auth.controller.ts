@@ -23,6 +23,7 @@ import { Payload } from './interfaces/payload.interface';
 import { FolderService } from 'src/folder/folder.service';
 import { AuthGuard } from '@nestjs/passport';
 import { resObj } from 'src/utils';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 
 interface GoogleUser {
   access_token: string;
@@ -53,7 +54,8 @@ export class AuthController {
     return { message: 'User created successfully' };
   }
 
-  @UseGuards(LocalAuthGuard)
+  @UseGuards(ThrottlerGuard, LocalAuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 * 2 } })
   @Post('login')
   async login(@Req() req: Request, @Res() res: Response) {
     const response = await this.authService.login(req.user as Payload, res);

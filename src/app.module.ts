@@ -30,8 +30,8 @@ import { ShareModule } from './share/share.module';
     ThrottlerModule.forRoot({
       throttlers: [
         {
-          ttl: 1000 * 60 * 60,
-          limit: 50,
+          ttl: 1000 * 60,
+          limit: 40,
         },
       ],
     }),
