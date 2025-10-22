@@ -3,16 +3,22 @@ import {
   HttpException,
   Injectable,
   InternalServerErrorException,
-  NotImplementedException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import fs from 'fs/promises';
 import path from 'path';
+import { Prisma } from '@prisma/client';
+import { WinstonLogger } from 'src/logger/winston.logger';
+
+const PAGEFOLDERSCOUNT = 24;
 
 @Injectable()
 export class FolderService {
-  constructor(private prismaService: PrismaService) {}
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly logger: WinstonLogger,
+  ) {}
 
   async getUserMainFolderId(userId: string): Promise<number> {
     try {
@@ -40,20 +46,25 @@ export class FolderService {
 
   async getUserFolders(userId: string, page: number) {
     try {
-      const pageFoldersCount = 24;
-
       const totalUserFolders = await this.prismaService.folder.count({
         where: {
           userId,
         },
       });
-      const pages = Math.ceil(totalUserFolders / pageFoldersCount);
+      const pages = Math.ceil(totalUserFolders / PAGEFOLDERSCOUNT);
       const folders = await this.prismaService.folder.findMany({
         where: {
           userId,
+          name: {
+            not: 'main',
+          },
+          parent: null,
         },
-        skip: (page - 1) * pageFoldersCount,
-        take: pageFoldersCount,
+        orderBy: {
+          createdAt: 'desc',
+        },
+        skip: (page - 1) * PAGEFOLDERSCOUNT,
+        take: PAGEFOLDERSCOUNT,
       });
 
       return { folders, pages };
@@ -65,10 +76,11 @@ export class FolderService {
     }
   }
 
-  async isFolderExisting(folderId: number): Promise<boolean> {
+  async isFolderExisting(userId: string, folderId: number): Promise<boolean> {
     const path = await this.prismaService.folder.findFirst({
       where: {
         id: folderId,
+        userId,
       },
       select: {
         path: true,
@@ -143,7 +155,108 @@ export class FolderService {
   }
 
   async deleteFolder(userId: string, folderId: number) {
-    throw new NotImplementedException('Not Implemented yet');
+    try {
+      await this.prismaService.$transaction(async (tx) => {
+        await this.deleteFolderRecursive(userId, folderId, tx);
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        throw new Error(`Database error: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
+  private async deleteFolderRecursive(
+    userId: string,
+    folderId: number,
+    tx: Prisma.TransactionClient,
+  ) {
+    const folder = await tx.folder.findFirst({
+      where: {
+        id: folderId,
+        userId,
+      },
+      include: {
+        children: true,
+        FileParent: {
+          include: {
+            file: {
+              include: {
+                Audio: true,
+                Video: true,
+                Image: true,
+                Favourite: true,
+                FilesTags: true,
+                DeletedFiles: true,
+              },
+            },
+          },
+        },
+        DeletedFolders: true,
+      },
+    });
+
+    if (!folder) {
+      throw new BadRequestException(
+        'Folder not found or does not belong to user',
+      );
+    }
+
+    for (const childFolder of folder.children) {
+      await this.deleteFolderRecursive(userId, childFolder.id, tx);
+    }
+
+    let totalSizeKb = 0;
+
+    for (const fileParent of folder.FileParent) {
+      const file = fileParent.file;
+      totalSizeKb += file.sizeInKb;
+
+      const filePath = path.join(
+        __dirname,
+        '../../uploads',
+        userId,
+        folder.path,
+        folder.name,
+        file.uniqueName,
+      );
+
+      try {
+        await fs.unlink(filePath);
+      } catch (error) {
+        console.warn(`Failed to delete file ${filePath}:`, error);
+      }
+
+      await tx.file.delete({ where: { id: file.id } });
+    }
+
+    const folderPath = path.join(
+      __dirname,
+      '../../uploads',
+      userId,
+      folder.path,
+      folder.name,
+    );
+
+    try {
+      await fs.rm(folderPath, { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`Failed to delete folder ${folderPath}:`, error);
+    }
+
+    await tx.storageQuota.update({
+      where: { userId },
+      data: {
+        usedQuota: {
+          decrement: totalSizeKb / 1000,
+        },
+      },
+    });
+
+    await tx.folder.delete({
+      where: { id: folderId },
+    });
   }
 
   async changeFolderName(folderId: number, newName: string, userId: string) {
@@ -201,7 +314,6 @@ export class FolderService {
         });
       }
     } catch (error: any) {
-      console.error(error?.response?.description || error);
       throw new HttpException(
         error?.response?.message ||
           'Unexpected error happened, try again in a minute',
@@ -263,6 +375,25 @@ export class FolderService {
               fileId: true,
             },
           },
+          Video: {
+            select: {
+              duration: true,
+              resolution: true,
+              thumbnail: true,
+              fps: true,
+            },
+          },
+          Image: {
+            select: {
+              resolution: true,
+              thumbnail: true,
+            },
+          },
+          Audio: {
+            select: {
+              duration: true,
+            },
+          },
         },
         orderBy: {
           createdAt: 'desc',
@@ -275,6 +406,10 @@ export class FolderService {
         ...file,
         isFavourite: file.Favourite.length > 0,
         Favourite: undefined,
+        duration: file?.Audio?.duration || file?.Video?.duration,
+        resolution: file?.Video?.resolution || file?.Image?.resolution,
+        fps: file?.Video?.fps,
+        thumbnail: file?.Video?.thumbnail || file?.Image?.thumbnail,
       }));
 
       const folders = await this.prismaService.folder.findMany({
@@ -289,6 +424,74 @@ export class FolderService {
       });
 
       return { files: formattedFiles, folders, pages: totalPages };
+    } catch (error: any) {
+      throw new HttpException(
+        error?.response?.message || 'Unexpected error happened',
+        error?.response?.statusCode || 500,
+      );
+    }
+  }
+
+  async getSharedFolders(
+    sharedWithId: string,
+    page: number,
+    order: 'desc' | 'asc',
+    name: string,
+  ) {
+    if (page < 1)
+      throw new BadRequestException('Page should be a positive number');
+    const where: any = {
+      sharedWithId,
+      folder: {
+        ...(name && { name: { contains: name, mode: 'insensitive' } }),
+        DeletedFolders: null,
+      },
+    };
+    try {
+      const foldersCount = await this.prismaService.share.count({
+        where,
+      });
+      const totalPages = Math.ceil(foldersCount / PAGEFOLDERSCOUNT);
+      const folders = await this.prismaService.share.findMany({
+        where,
+        orderBy: {
+          createdAt: order || 'desc',
+        },
+        select: {
+          folder: {
+            select: {
+              id: true,
+              name: true,
+              createdAt: true,
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+        skip: (page - 1) * PAGEFOLDERSCOUNT,
+        take: PAGEFOLDERSCOUNT,
+      });
+
+      const mappedResult = folders.map((folder) => {
+        return {
+          id: folder.folder.id,
+          name: folder.folder.name,
+          createdAt: folder.folder.createdAt,
+          type: 'folder',
+          user: {
+            firstName: folder.folder.user.firstName,
+            lastName: folder.folder.user.lastName,
+            email: folder.folder.user.email,
+          },
+        };
+      });
+
+      return { data: mappedResult, pages: totalPages };
     } catch (error: any) {
       throw new HttpException(
         error?.response?.message || 'Unexpected error happened',

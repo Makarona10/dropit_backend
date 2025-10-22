@@ -1,4 +1,4 @@
 export interface Payload {
-  id: number;
+  id: string;
   email: string;
 }

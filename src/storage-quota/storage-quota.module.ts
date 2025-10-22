@@ -8,5 +8,6 @@ import { PrismaService } from 'src/prisma/prisma.service';
   imports: [PrismaModule],
   controllers: [StorageQuotaController],
   providers: [StorageQuotaService, PrismaService],
+  exports: [StorageQuotaService],
 })
 export class StorageQuotaModule {}

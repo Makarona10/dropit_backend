@@ -19,7 +19,7 @@ model User {
   email        String        @unique @db.VarChar(256)
   firstName    String        @db.VarChar(25)
   lastName     String        @db.VarChar(25)
-  passwords    Password[] // One-to-Many Relation
+  passwords    Password[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   File         File[]
@@ -27,6 +27,7 @@ model User {
   StorageQuota StorageQuota?
   Tag          Tag[]
   Folder       Folder[]
+  Share        Share[]
 }
 
 model Password {
@@ -61,6 +62,7 @@ model File {
   DeletedFiles DeletedFiles?
   FilesTags    FilesTags[]
   FileParent   FileParent?
+  Share        Share[]
 }
 
 model Audio {
@@ -75,12 +77,14 @@ model Video {
   resolution String @db.VarChar(64)
   duration   Int
   fps        Int
+  thumbnail  String @default("") @db.VarChar(2048)
 }
 
 model Image {
   imageId    Int    @id
   file       File   @relation(fields: [imageId], references: [id], onDelete: Cascade)
   resolution String @db.VarChar(64)
+  thumbnail  String @default("") @db.VarChar(2048)
 }
 
 model Favourite {
@@ -96,7 +100,6 @@ model StorageQuota {
   id         Int    @id @default(autoincrement())
   userId     String @unique @db.Uuid
   user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // total and used QuotaInMB
   totalQuota Int
   usedQuota  Float
 }
@@ -126,18 +129,18 @@ model FilesTags {
 }
 
 model Folder {
-  id         Int          @id @default(autoincrement())
-  name       String       @db.VarChar(128)
-  path       String       @db.Text
-  userId     String       @db.Uuid
-  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt  DateTime     @default(now())
-  FileParent FileParent[]
-
-  parentId       Int?             @db.Integer
-  parent         Folder?          @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children       Folder[]         @relation("FolderHierarchy")
-  DeletedFolders DeletedFolders[]
+  id             Int             @id @default(autoincrement())
+  name           String          @db.VarChar(128)
+  path           String          @db.Text
+  userId         String          @db.Uuid
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime        @default(now())
+  FileParent     FileParent[]
+  parentId       Int?            @db.Integer
+  parent         Folder?         @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children       Folder[]        @relation("FolderHierarchy")
+  DeletedFolders DeletedFolders?
+  Share          Share[]
 }
 
 model FileParent {
@@ -149,6 +152,20 @@ model FileParent {
 
 model DeletedFolders {
   folderId  Int      @id
-  folder    Folder   @relation(fields: [folderId], references: [id])
+  folder    Folder   @relation(fields: [folderId], references: [id], onDelete: Cascade)
   deletedAt DateTime @default(now())
+}
+
+model Share {
+  id           Int      @id @default(autoincrement())
+  fileId       Int?
+  folderId     Int?
+  file         File?    @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  folder       Folder?  @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  sharedWithId String   @db.Uuid
+  sharedWith   User     @relation(fields: [sharedWithId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+
+  @@unique([fileId, sharedWithId])
+  @@unique([folderId, sharedWithId])
 }

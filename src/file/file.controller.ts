@@ -1,11 +1,10 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpException,
-  NotImplementedException,
   Param,
   ParseIntPipe,
   Patch,
@@ -13,13 +12,13 @@ import {
   Query,
   Req,
   Response,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { FileService } from './file.service';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { Request, Response as Res } from 'express';
 import * as mime from 'mime-types';
 import { resObj } from 'src/utils';
@@ -34,29 +33,45 @@ export class FileController {
 
   @UseGuards(JwtAuthGuard)
   @Post('upload-file')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FilesInterceptor('files', 20))
   async saveFile(
     @Req() req: Request,
-    @UploadedFile() file: Express.Multer.File,
-    @Query('parentId') parentId: number | null,
+    @UploadedFiles() files: Array<Express.Multer.File>,
+    @Query('parentId') parentId: number,
   ) {
     const user = req.user as { id: string; email: string };
+    const fixedFiles = files.map((f) => {
+      const correctedName = Buffer.from(f.originalname, 'latin1').toString(
+        'utf8',
+      );
+
+      return { ...f, originalname: correctedName };
+    });
+
     if (parentId) {
-      await this.fileService.uploadFile(user.id, file, +parentId);
+      await Promise.all(
+        fixedFiles.map((f) =>
+          this.fileService.uploadFile(user.id, f, +parentId),
+        ),
+      );
     } else {
       const mainFolderId = await this.folderService.getUserMainFolderId(
         user.id,
       );
-      await this.fileService.uploadFile(user.id, file, mainFolderId);
+      await Promise.all(
+        fixedFiles.map((f) =>
+          this.fileService.uploadFile(user.id, f, mainFolderId),
+        ),
+      );
     }
-    return resObj(201, 'File uploaded successfully', []);
+
+    return resObj(201, 'Files uploaded successfully!', []);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('get-file/:fileId')
   async getFile(@Req() req: Request, @Param('fileId') fileId: number) {
     const user = req.user as { id: string; email: string };
-
     const result = await this.fileService.getFile(user.id, +fileId);
     return resObj(200, 'File retrieved successfully', result);
   }
@@ -65,7 +80,6 @@ export class FileController {
   @Get('recently-uploaded/')
   async getRecentUserFilesAndFolders(@Req() req: Request) {
     const user = req.user as { id: string; email: string };
-
     const result = await this.fileService.getRecentUserFilesAndFolders(user.id);
     return resObj(200, 'Files and folders retrieved successfully', result);
   }
@@ -74,8 +88,10 @@ export class FileController {
   @Get('get-videos')
   async getVideos(
     @Req() req: Request,
-    @Body('order') order: 'asc' | 'desc',
-    @Body('extension') extension: string,
+    @Query('order') order: 'asc' | 'desc',
+    @Query('extension') extension: string,
+    @Query('duration') duration: number,
+    @Query('sortBy') sortBy: string,
     @Query('page') page: number,
   ) {
     const user = req.user as { id: string; email: string };
@@ -83,6 +99,8 @@ export class FileController {
       user.id,
       order || 'desc',
       extension,
+      duration || 0,
+      sortBy,
       +page,
     );
 
@@ -93,9 +111,10 @@ export class FileController {
   @Get('get-images')
   async getImage(
     @Req() req: Request,
-    @Body('order') order: 'asc' | 'desc',
-    @Body('extension') extension: string,
+    @Query('order') order: 'asc' | 'desc',
+    @Query('extension') extension: string,
     @Query('page') page: number,
+    @Query('sortBy') sortBy: 'name' | 'createdAt' | 'extension' | 'sizeInKb',
   ) {
     const user = req.user as { id: string; email: string };
     const result = await this.fileService.getImages(
@@ -103,53 +122,10 @@ export class FileController {
       order || 'desc',
       extension,
       +page,
+      sortBy,
     );
 
     return resObj(200, 'Images retrieved successfully', result);
-  }
-
-  // Move later to favourite controller
-  @UseGuards(JwtAuthGuard)
-  @Get('get-favourite')
-  async getFavouriteFiles(
-    @Req() req: Request,
-    @Body('order') order: 'asc' | 'desc' | null,
-    @Body('filter') filter: 'image' | 'video' | 'audio' | 'other' | null,
-    @Query('page') page: number,
-  ) {
-    if (+page < 1)
-      return new BadRequestException('page number must me greater than 0');
-    const user = req.user as { id: string; email: string };
-    const _page: number = page ? page : 1;
-    const result = await this.fileService.getFavouriteFiles(user.id, {
-      order,
-      filter,
-      page: _page,
-    });
-
-    return resObj(200, 'Favourite files retrieved successfully', result);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get('get-favourite-videos')
-  async getFavouriteVideos(
-    @Req() req: Request,
-    @Body('order') order: 'asc' | 'desc' | null,
-    @Body('extension') extension: string | null,
-    @Query('page') page: number,
-  ) {
-    if (+page < 1)
-      return new BadRequestException('page number must me greater than 0');
-
-    const user = req.user as { id: string; email: string };
-    const result = await this.fileService.getFavouriteVideos(
-      user.id,
-      order,
-      extension,
-      page,
-    );
-
-    return resObj(200, 'Favourite videos retrieved successfully', result);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -183,22 +159,28 @@ export class FileController {
   async downloadFile(
     @Req() req: Request,
     @Param('fileId', new ParseIntPipe()) fileId: number,
-    @Response() res: Res,
+    @Response({ passthrough: false }) res: Res,
   ) {
     const user = req.user as { id: string; email: string };
+    const haveAccess = await this.fileService.haveAccessToFile(
+      user.id,
+      +fileId,
+    );
+    if (!haveAccess) {
+      throw new ForbiddenException('You do not have access to this file');
+    }
     try {
       const { stream, stats, fileName, extension } =
-        await this.fileService.downloadFile(user.id, fileId);
+        await this.fileService.downloadFile(+fileId);
       const contentType = mime.lookup(extension) || 'application/octet-stream';
+      const correctedName = Buffer.from(fileName, 'latin1').toString('utf8');
       res.set({
         'Content-Type': contentType,
-        'Content-Disposition': `attachment; filename=${fileName}`,
+        'Content-Disposition': `attachment; filename=${correctedName}`,
         'Content-Length': stats.size,
+        'Accept-Ranges': 'bytes', // Allows partial downloads
       });
       res.status(200);
-      // res.setHeader('Content-Type', contentType);
-      // res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-      // res.setHeader('Content-Length', stats.size);
 
       stream.pipe(res);
 
@@ -222,22 +204,96 @@ export class FileController {
       });
     } catch (error: any) {
       throw new HttpException(
-        error?.response?.message ||
-          error?.message ||
+        error.message ||
           'Error happened while downloading the file, try again in a minute',
-        error?.response?.statusCode || 500,
+        error?.status || 500,
       );
     }
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('share')
-  async shareFile(
+  @Get('shared/files')
+  async getSharedFiles(
     @Req() req: Request,
-    @Query('fileId', new ParseIntPipe()) fileId: number,
+    @Query('name') name: string,
+    @Query('ownerEmail') ownerEmail: number,
+    @Query('order') order: string,
+    @Query('sortBy') sortBy: string,
+    @Query('page') page: number,
+    @Query('type') type: string,
   ) {
-    throw new NotImplementedException('Coming soon...');
     const user = req.user as { id: string; email: string };
-    return this.fileService.shareFile();
+    const result = await this.fileService.getSharedFiles({
+      userId: user.id,
+      name,
+      ownerEmail,
+      order,
+      page,
+      type,
+      sortBy,
+    });
+    return resObj(200, 'Shared files retrieved successfully', result);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('shared/videos')
+  async getShareVideos(
+    @Req() req: Request,
+    @Query('name') name: string,
+    @Query('ownerEmail') ownerEmail: number,
+    @Query('order') order: string,
+    @Query('sortBy') sortBy: string,
+    @Query('page') page: number,
+    @Query('extension') extension: string,
+    @Query('duration') duration: number,
+    @Query('sizeInKb') sizeInKb: number,
+  ) {
+    const user = req.user as { id: string; email: string };
+    const result = await this.fileService.getSharedVideos({
+      userId: user.id,
+      name,
+      ownerEmail,
+      order,
+      page,
+      sizeInKb,
+      duration,
+      extension,
+      sortBy,
+    });
+    return resObj(200, 'Shared videos retrieved successfully', result);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('shared/images')
+  async getShareImages(
+    @Req() req: Request,
+    @Query('name') name: string,
+    @Query('ownerEmail') ownerEmail: string,
+    @Query('order') order: 'asc' | 'desc',
+    @Query('page') page: number,
+    @Query('sortBy') sortBy: 'name' | 'createdAt' | 'extension' | 'sizeInKb',
+    @Query('extension') extension: string,
+    @Query('sizeInKb') sizeInKb: number,
+  ) {
+    const user = req.user as { id: string; email: string };
+    const result = await this.fileService.getSharedImages({
+      userId: user.id,
+      name,
+      extension,
+      sizeInKb: +sizeInKb,
+      ownerEmail,
+      order: order || 'desc',
+      page: +page || 1,
+      sortBy: sortBy || 'createdAt',
+    });
+    return resObj(200, 'Shared images retrieved successfully', result);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('shared/get-file/:fileId')
+  async getSharedFile(@Req() req: Request, @Param('fileId') fileId: number) {
+    const user = req.user as { id: string; email: string };
+    const result = await this.fileService.getSharedFile(user.id, +fileId);
+    return resObj(200, 'Shared file retrieved successfully', result);
   }
 }

@@ -40,6 +40,7 @@ export class TagController {
     @Req() req: Request,
     @Param('tagId', new ParseIntPipe()) tagId: number,
     @Query('page', new ParseIntPipe()) page: number,
+    @Query('fileName') fileName: string,
     @Query('orderBy') orderBy: 'name' | 'createdAt',
     @Query('arrange') arrange: 'asc' | 'desc',
   ) {
@@ -50,6 +51,7 @@ export class TagController {
       orderBy || 'createdAt',
       arrange || 'desc',
       +page,
+      fileName,
     );
 
     return resObj(200, 'Tag files retrieved successfully', files);
@@ -65,6 +67,18 @@ export class TagController {
     const user = req.user as { id: string; email: string };
     await this.tagService.addFileToTag(user.id, fileId, tagId);
     return resObj(201, 'File tagged successfully!', []);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('remove-file/:tagId/:fileId')
+  async removeFileFromTag(
+    @Req() req: Request,
+    @Param('tagId', new ParseIntPipe()) tagId: number,
+    @Param('fileId', new ParseIntPipe()) fileId: number,
+  ) {
+    const user = req.user as { id: string; email: string };
+    await this.tagService.removeFileFromTag(user.id, fileId, tagId);
+    return resObj(200, 'File untagged successfully!', []);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -2,7 +2,6 @@ import {
   Controller,
   Delete,
   Get,
-  NotImplementedException,
   Param,
   ParseIntPipe,
   Post,
@@ -31,12 +30,11 @@ export class BinController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('clean-bin')
-  async cleanBin(
-    @Req() req: Request,
-    @Query('folderId', new ParseIntPipe()) fileId: number,
-  ) {
-    throw new NotImplementedException('Coming soon...');
+  @Delete('clean-bin')
+  async cleanBin(@Req() req: Request) {
+    const user = req.user as { id: string; email: string };
+    await this.binService.cleanBin(user.id);
+    return resObj(200, 'Bin cleaned successfully!', []);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -60,14 +58,26 @@ export class BinController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Delete('delete-file-permanently')
+  @Delete('delete-file-permanently/:fileId')
   async deleteFilePermanently(
     @Req() req: Request,
-    @Query('fileId', new ParseIntPipe()) fileId: number,
+    @Param('fileId', new ParseIntPipe()) fileId: number,
   ) {
     const user = req.user as { id: string; email: string };
     await this.binService.deleteFilePermanently(fileId, user.id);
 
     return resObj(200, 'File deleted successfully', []);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('restore-file/:fileId')
+  async restoreDeletedFile(
+    @Req() req: Request,
+    @Param('fileId', new ParseIntPipe()) fileId: number,
+  ) {
+    const user = req.user as { id: string; email: string };
+    await this.binService.restoreDeletedFile(fileId, user.id);
+
+    return resObj(200, 'Deleted file restored successfully', []);
   }
 }

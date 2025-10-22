@@ -15,6 +15,8 @@ import { RefreshTokenRateLimitMiddleware } from 'src/common/middlewares/rate-lim
 import { PassportModule } from '@nestjs/passport';
 import { FolderModule } from 'src/folder/folder.module';
 import { FolderService } from 'src/folder/folder.service';
+import { LoggerModule } from 'src/logger/winston.logger.module';
+import { GoogleStrategy } from './strategy/google.strategy';
 
 @Module({
   imports: [
@@ -24,6 +26,7 @@ import { FolderService } from 'src/folder/folder.service';
     PrismaModule,
     PasswordModule,
     FolderModule,
+    LoggerModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -43,6 +46,7 @@ import { FolderService } from 'src/folder/folder.service';
     JwtStrategy,
     RedisService,
     FolderService,
+    GoogleStrategy,
   ],
   controllers: [AuthController],
 })

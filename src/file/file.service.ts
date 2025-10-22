@@ -3,24 +3,54 @@ import {
   HttpException,
   Injectable,
   InternalServerErrorException,
-  NotImplementedException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import fs from 'fs';
 import fsPromise from 'fs/promises';
-import Ffmpeg from 'fluent-ffmpeg';
 import sharp from 'sharp';
 import path from 'path';
 import { FolderService } from 'src/folder/folder.service';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
+import ffprobeStatic from 'ffprobe-static';
+import { StorageQuotaService } from 'src/storage-quota/storage-quota.service';
+import { WinstonLogger } from 'src/logger/winston.logger';
+const Ffmpeg = ffmpeg;
+ffmpeg.setFfmpegPath(ffmpegStatic as string);
+ffmpeg.setFfprobePath(ffprobeStatic.path);
 
-// TODO: Thumbnail will be shown on the restored files
+const fileOrder = ['sizeInKb', 'extension', 'name'];
 
 @Injectable()
 export class FileService {
   constructor(
     private readonly prismaService: PrismaService,
     private readonly folderService: FolderService,
+    private readonly QuotaService: StorageQuotaService,
+    private readonly logger: WinstonLogger,
   ) {}
+
+  sharedItemsPerPage: number = 15;
+
+  async haveAccessToFile(userId: string, fileId: number) {
+    const file = await this.prismaService.file.findFirst({
+      where: {
+        id: fileId,
+        userId,
+      },
+    });
+    if (file) return true;
+
+    const sharedFile = await this.prismaService.share.findFirst({
+      where: {
+        fileId,
+        sharedWithId: userId,
+      },
+    });
+    if (sharedFile) return true;
+
+    return false;
+  }
 
   async getFile(userId: string, fileId: number) {
     if (!fileId || fileId < 1) {
@@ -33,7 +63,6 @@ export class FileService {
           userId,
           id: fileId,
         },
-
         select: {
           id: true,
           createdAt: true,
@@ -85,26 +114,34 @@ export class FileService {
         throw new BadRequestException('Oops, File not found!');
       }
 
+      const parentPath = file?.FileParent?.folder?.path;
+      const parentName = file?.FileParent?.folder?.name;
+      let filePath: string = path.join(parentPath || '', parentName || '');
+
+      if (!parentName && !parentName) {
+        filePath = 'main';
+      }
+
       const finalFile = {
         ...file,
-        duration: file.Audio?.duration || file.Video?.duration,
-        resolution: file.Video?.resolution || file.Image?.resolution,
-        fps: file.Video?.fps,
+        duration: file?.Audio?.duration || file?.Video?.duration,
+        resolution: file?.Video?.resolution || file?.Image?.resolution,
+        fps: file?.Video?.fps,
         isFavourite: !!file.Favourite.length,
         Favourite: undefined,
         Audio: undefined,
         Video: undefined,
         Image: undefined,
         FileParent: undefined,
-        path: file?.FileParent?.folder?.path + file.FileParent?.folder?.name,
+        path: filePath,
       };
 
       return finalFile;
     } catch (error) {
       throw new HttpException(
-        error?.response?.data?.message ||
+        error?.response?.message ||
           'Error happened while retrieving file from DB',
-        error?.response?.data?.statusCode || 500,
+        error?.response?.statusCode || 500,
       );
     }
   }
@@ -124,6 +161,7 @@ export class FileService {
         select: {
           id: true,
           createdAt: true,
+          userId: true,
           extension: true,
           name: true,
           sizeInKb: true,
@@ -138,11 +176,13 @@ export class FileService {
               duration: true,
               fps: true,
               resolution: true,
+              thumbnail: true,
             },
           },
           Image: {
             select: {
               resolution: true,
+              thumbnail: true,
             },
           },
           Favourite: {
@@ -164,6 +204,7 @@ export class FileService {
         ...f,
         duration: f.Audio?.duration || f.Video?.duration,
         resolution: f.Video?.resolution || f.Image?.resolution,
+        thumbnail: f?.Image?.thumbnail || f?.Video?.thumbnail || undefined,
         fps: f.Video?.fps,
         isFavourite: !!f.Favourite.length,
         Favourite: undefined,
@@ -175,6 +216,9 @@ export class FileService {
       const folders = await this.prismaService.folder.findMany({
         where: {
           userId: id,
+          name: {
+            not: 'main',
+          },
         },
         orderBy: {
           createdAt: 'desc',
@@ -196,6 +240,8 @@ export class FileService {
     userId: string,
     order: 'asc' | 'desc',
     extension: string | null,
+    duration: number,
+    sortBy: string,
     page: number,
   ) {
     try {
@@ -208,6 +254,13 @@ export class FileService {
           type: 'video',
           extension: extension ? extension.toLowerCase() : undefined,
           DeletedFiles: null,
+          ...(duration && {
+            Video: {
+              duration: {
+                gte: +duration,
+              },
+            },
+          }),
         },
       });
 
@@ -219,9 +272,17 @@ export class FileService {
           type: 'video',
           extension: extension ? extension.toLowerCase() : undefined,
           DeletedFiles: null,
+          ...(duration && {
+            Video: {
+              duration: {
+                gte: +duration,
+              },
+            },
+          }),
         },
         select: {
           id: true,
+          userId: true,
           name: true,
           uniqueName: true,
           sizeInKb: true,
@@ -233,6 +294,7 @@ export class FileService {
               resolution: true,
               duration: true,
               fps: true,
+              thumbnail: true,
             },
           },
           Favourite: {
@@ -245,23 +307,27 @@ export class FileService {
             take: 1,
           },
         },
-        orderBy: {
-          createdAt: order,
-        },
         skip,
         take: pageSize,
+        orderBy: {
+          ...(sortBy
+            ? { [sortBy]: order || 'desc' }
+            : { createdAt: order || 'desc' }),
+        },
       });
 
       const videos = result.map((file) => ({
         id: file.id,
         name: file.name,
+        userId: file.userId,
         uniqueName: file.uniqueName,
         sizeInKb: file.sizeInKb,
         type: file.type,
         extension: file.extension,
         createdAt: file.createdAt,
         resolution: file.Video?.resolution,
-        duration: file.Video?.duration,
+        duration: file?.Video?.duration,
+        thumbnail: file?.Video?.thumbnail,
         fps: file.Video?.fps,
         isFavourite: file.Favourite.length > 0,
       }));
@@ -280,6 +346,7 @@ export class FileService {
     order: 'asc' | 'desc',
     extension: string | null,
     page: number,
+    sortBy: 'name' | 'createdAt' | 'sizeInKb' | 'extension',
   ) {
     try {
       const pageSize = 24;
@@ -305,6 +372,7 @@ export class FileService {
         },
         select: {
           id: true,
+          userId: true,
           name: true,
           uniqueName: true,
           sizeInKb: true,
@@ -314,6 +382,7 @@ export class FileService {
           Image: {
             select: {
               resolution: true,
+              thumbnail: true,
             },
           },
           Favourite: {
@@ -327,7 +396,7 @@ export class FileService {
           },
         },
         orderBy: {
-          createdAt: order,
+          ...{ [sortBy || 'createdAt']: order || 'desc' },
         },
         skip,
         take: pageSize,
@@ -336,11 +405,13 @@ export class FileService {
       const images = result.map((file) => ({
         id: file.id,
         name: file.name,
+        userId: file.userId,
         sizeInKb: file.sizeInKb,
         type: file.type,
         extension: file.extension,
         createdAt: file.createdAt,
         resolution: file.Image?.resolution,
+        thumbnail: file.Image?.thumbnail,
         isFavourite: file.Favourite.length > 0,
       }));
 
@@ -353,7 +424,6 @@ export class FileService {
     }
   }
   async getFileParentDirectory(fileId: number, userId: string) {
-    // returns the complete path starting from root
     const userUploadsPath = path.join(__dirname, '../../uploads', userId);
     const fileParent = await this.prismaService.$queryRaw<
       Array<{ path: string; name: string }>
@@ -369,7 +439,6 @@ export class FileService {
     return filePath;
   }
 
-  // saves files to the server
   async saveFileToSystem(
     file: Express.Multer.File,
     directory: string,
@@ -379,7 +448,6 @@ export class FileService {
     fs.writeFileSync(`${directory}/${uniqueName}`, file.buffer);
   }
 
-  // saves files using streams
   async saveLargeFileToSystem(
     file: Express.Multer.File,
     directory: string,
@@ -394,7 +462,6 @@ export class FileService {
       ws.write(file.buffer, (error: any) => {
         if (error) {
           ws.end();
-          console.error(error);
           return reject(
             new InternalServerErrorException(
               `Failed to save the file, try again in a minute`,
@@ -418,7 +485,7 @@ export class FileService {
     });
   }
 
-  async getVideoFPS(filePath: string): Promise<number> {
+  private async getVideoFPS(filePath: string): Promise<number> {
     return new Promise((resolve, reject) => {
       Ffmpeg.ffprobe(filePath, (err, metadata) => {
         if (err) {
@@ -480,7 +547,6 @@ export class FileService {
     });
   }
 
-  // save the file and its parent to fileParent table
   async saveFileAndParent(parentId: number, fileId: number): Promise<any> {
     return await this.prismaService.fileParent.create({
       data: {
@@ -494,13 +560,11 @@ export class FileService {
     filePath: string,
     type: string,
   ): Promise<{ width: number; height: number }> {
-    // Determine file type based on extension
     const fileExtension = filePath.split('.').pop()?.toLowerCase();
     if (!fileExtension) {
       throw new BadRequestException('File has no extension');
     }
 
-    // Handle video files
     if (type === 'video') {
       return new Promise((resolve, reject) => {
         Ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -512,7 +576,6 @@ export class FileService {
             );
           }
 
-          // Find the video stream
           const videoStream = metadata.streams.find(
             (stream: any) => stream.codec_type === 'video',
           );
@@ -522,7 +585,6 @@ export class FileService {
             );
           }
 
-          // Extract width and height
           const width = videoStream.width;
           const height = videoStream.height;
 
@@ -537,7 +599,6 @@ export class FileService {
       });
     }
 
-    // Handle image files
     if (type === 'image') {
       try {
         const metadata = await sharp(filePath).metadata();
@@ -560,13 +621,11 @@ export class FileService {
       }
     }
 
-    // Unsupported file type
     throw new BadRequestException(
       `Unsupported file type for resolution extraction: ${fileExtension}`,
     );
   }
 
-  // saves the file details to DB
   async saveFileToDB(
     userId: string,
     name: string,
@@ -598,7 +657,6 @@ export class FileService {
       }
       return savedFile;
     } catch (error: any) {
-      console.error(error);
       throw new HttpException(
         error?.response?.message || 'Error happened while saving file to DB',
         error?.response?.statusCode || 500,
@@ -606,7 +664,6 @@ export class FileService {
     }
   }
 
-  // handles all the upload process
   async uploadFile(
     userId: string,
     file: Express.Multer.File,
@@ -614,6 +671,17 @@ export class FileService {
   ) {
     if (!file)
       throw new BadRequestException('No file selected, please upload a file!');
+
+    const isAllowedToSave = await this.QuotaService.checkAllowedToAdd(
+      userId,
+      file.size / 1024,
+    );
+
+    if (!isAllowedToSave)
+      throw new BadRequestException(
+        'You need to free some space to upload this file!',
+      );
+
     try {
       const uniqueName: string = Date.now() + file.originalname;
       const fileExtension: string = file.originalname
@@ -658,17 +726,25 @@ export class FileService {
         parentId,
       );
 
+      await this.QuotaService.increaseConsumedQuota(userId, savedFile.sizeInKb);
+
       const filePath = `${fullDir}/${uniqueName}`;
       if (fType === 'video') {
         const duration: number = await this.getVideoDuration(filePath);
         const fps: number = await this.getVideoFPS(filePath);
         const resolution = await this.getMediaResolution(filePath, 'video');
+        const thumbnail = await this.generateVideoThumbnail(
+          filePath,
+          userId,
+          uniqueName,
+        );
         await this.prismaService.video.create({
           data: {
             resolution: `${resolution.width} * ${resolution.height}`,
             videoId: savedFile.id,
             duration: duration || 0,
             fps,
+            thumbnail,
           },
         });
       } else if (fType === 'audio') {
@@ -680,11 +756,17 @@ export class FileService {
           },
         });
       } else if (fType === 'image') {
+        const thumbnailName = await this.generateImageThumbnail(
+          filePath,
+          userId,
+          uniqueName,
+        );
         const resolution = await this.getMediaResolution(filePath, 'image');
         await this.prismaService.image.create({
           data: {
             resolution: `${resolution.width} * ${resolution.height}`,
             imageId: savedFile.id,
+            thumbnail: thumbnailName,
           },
         });
       }
@@ -692,207 +774,6 @@ export class FileService {
       // TODO: Delete file from the system if error happens during the save process
       throw new HttpException(
         error?.response?.message || 'Error happened while uploading file!',
-        error?.response?.statusCode || 500,
-      );
-    }
-  }
-
-  async getFavouriteFiles(
-    userId: string,
-    args: {
-      order: 'asc' | 'desc' | null;
-      filter: 'image' | 'audio' | 'video' | 'other' | null;
-      page: number;
-    },
-  ) {
-    const offset = (args.page - 1) * 24;
-
-    const totalCountResult = await this.prismaService.file.count({
-      where: {
-        userId,
-        Favourite: {
-          some: {
-            userId,
-          },
-        },
-      },
-    });
-
-    const totalCount = Number(totalCountResult[0]?.count) || 0;
-
-    const pages = Math.ceil(totalCount / 24);
-
-    try {
-      const files = await this.prismaService.file.findMany({
-        where: {
-          userId,
-          Favourite: {
-            some: {
-              userId,
-            },
-          },
-          DeletedFiles: null,
-          ...(args.filter && { type: args.filter }),
-        },
-        select: {
-          id: true,
-          name: true,
-          uniqueName: true,
-          sizeInKb: true,
-          type: true,
-          extension: true,
-          createdAt: true,
-          Image: {
-            select: {
-              resolution: true,
-            },
-          },
-          Video: {
-            select: {
-              resolution: true,
-              duration: true,
-              fps: true,
-            },
-          },
-          Audio: {
-            select: {
-              duration: true,
-            },
-          },
-          Favourite: {
-            select: {
-              fileId: true,
-            },
-            where: {
-              userId,
-            },
-            take: 1,
-          },
-        },
-
-        orderBy: {
-          createdAt: args.order,
-        },
-        skip: offset,
-        take: 24,
-      });
-
-      const theFiles = files.map((file) => ({
-        id: file.id,
-        name: file.name,
-        uniqueName: file.uniqueName,
-        sizeInKb: file.sizeInKb,
-        type: file.type,
-        extension: file.extension,
-        createdAt: file.createdAt,
-        resolution: file.Image?.resolution,
-        fps: file.Video?.fps,
-        duration: file.Audio?.duration,
-        isFavourite: true,
-      }));
-
-      return { pages, files: theFiles };
-    } catch (error: any) {
-      throw new HttpException(
-        error?.response?.message ||
-          'Unknown error happened while retrieving favourite files, please try again in a minute',
-        error?.response?.statusCode || 500,
-      );
-    }
-  }
-
-  async getFavouriteVideos(
-    userId: string,
-    order: 'asc' | 'desc',
-    extension: string | null,
-    page: number,
-  ) {
-    if (!userId || typeof userId !== 'string') {
-      throw new BadRequestException('Invalid user ID');
-    }
-
-    try {
-      const pageSize = 24;
-      const skip = (page - 1) * pageSize;
-
-      const count = await this.prismaService.file.count({
-        where: {
-          userId,
-          type: 'video',
-          extension: extension ? extension.toLowerCase() : undefined,
-          DeletedFiles: null,
-          Favourite: {
-            some: {
-              userId,
-            },
-          },
-        },
-      });
-
-      const pages = count === 0 ? 0 : Math.ceil(count / pageSize);
-
-      const videos = await this.prismaService.file.findMany({
-        where: {
-          userId,
-          type: 'video',
-          extension: extension ? extension.toLowerCase() : undefined,
-          DeletedFiles: null,
-          Favourite: {
-            some: {
-              userId,
-            },
-          },
-        },
-        select: {
-          id: true,
-          name: true,
-          uniqueName: true,
-          sizeInKb: true,
-          type: true,
-          extension: true,
-          createdAt: true,
-          Video: {
-            select: {
-              resolution: true,
-              duration: true,
-              fps: true,
-            },
-          },
-          Favourite: {
-            select: {
-              fileId: true,
-            },
-            where: {
-              userId,
-            },
-            take: 1,
-          },
-        },
-        orderBy: {
-          createdAt: order,
-        },
-        skip,
-        take: pageSize,
-      });
-
-      const vids = videos.map((file) => ({
-        id: file.id,
-        name: file.name,
-        uniqueName: file.uniqueName,
-        sizeInKb: file.sizeInKb,
-        type: file.type,
-        extension: file.extension,
-        createdAt: file.createdAt,
-        duration: file.Video?.duration,
-        resolution: file.Video?.resolution,
-        fps: file.Video?.fps,
-        isFavourite: true,
-      }));
-
-      return { videos: vids, pages };
-    } catch (error: any) {
-      throw new HttpException(
-        error?.response?.message || 'Error retrieving favourite videos',
         error?.response?.statusCode || 500,
       );
     }
@@ -931,7 +812,6 @@ export class FileService {
 
       return Promise.resolve();
     } catch (error: any) {
-      console.error(error);
       throw new HttpException(
         error?.response?.message ||
           'Unexpected error happened, Please try again in a minute',
@@ -975,7 +855,6 @@ export class FileService {
 
       return Promise.resolve('Directory updated successfully');
     } catch (error: any) {
-      console.error(error);
       throw new HttpException(
         error?.response?.message ||
           'Unexpected error happened, try again in a minute',
@@ -984,19 +863,37 @@ export class FileService {
     }
   }
 
-  async downloadFile(userId: string, fileId: number) {
+  async downloadFile(fileId: number) {
     try {
       const file = await this.prismaService.file.findFirst({
         where: {
           id: fileId,
-          userId,
+        },
+        select: {
+          id: true,
+          name: true,
+          uniqueName: true,
+          userId: true,
+          FileParent: {
+            select: {
+              folder: {
+                select: {
+                  path: true,
+                },
+              },
+            },
+          },
+          sizeInKb: true,
+          type: true,
+          createdAt: true,
+          extension: true,
         },
       });
 
       if (!file) throw new BadRequestException('File not found!');
 
-      const folderPath = await this.getFileParentDirectory(fileId, userId);
-      const filePath = folderPath + '/' + file.uniqueName;
+      const folderPath = await this.getFileParentDirectory(fileId, file.userId);
+      const filePath = path.join(folderPath || '', file.uniqueName || '');
       try {
         await fsPromise.access(filePath);
       } catch {
@@ -1020,7 +917,445 @@ export class FileService {
     }
   }
 
-  async shareFile() {
-    return new NotImplementedException('Coming soon ...');
+  private async generateImageThumbnail(
+    filePath: string,
+    userId: string,
+    fileName: string,
+  ) {
+    const thumbnailDir = path.join(
+      __dirname,
+      '../../uploads',
+      userId,
+      'thumbnails',
+    );
+    await fsPromise.mkdir(thumbnailDir, { recursive: true });
+    const thumbnailName = `thumbnail_${fileName}.jpg`;
+    const thumbnailPath = path.join(thumbnailDir, thumbnailName);
+
+    await sharp(filePath)
+      .resize(200, 200, { fit: 'cover', position: 'center' })
+      .jpeg({ quality: 80 })
+      .toFile(thumbnailPath);
+
+    return thumbnailName;
+  }
+
+  escapeShellArg(arg: string): string {
+    return `'${arg.replace(/'/g, `'\\''`)}'`;
+  }
+
+  async generateVideoThumbnail(
+    filePath: string,
+    userId: string,
+    filename: string,
+  ): Promise<string> {
+    const thumbnailDir = path.join(
+      __dirname,
+      '../../uploads',
+      userId,
+      'thumbnails',
+    );
+    await fsPromise.mkdir(thumbnailDir, { recursive: true });
+
+    const baseName = path.parse(filename).name;
+    const thumbnailFilename = `thumbnail_${baseName}.jpg`;
+
+    return new Promise((resolve, reject) => {
+      ffmpeg(filePath)
+        .screenshots({
+          count: 1, // ignored when timemarks is set, but harmless
+          timemarks: ['1'], // current key name
+          size: '280x200',
+          filename: thumbnailFilename,
+          folder: thumbnailDir,
+        })
+        .on('end', () => resolve(thumbnailFilename))
+        .on('error', (err) =>
+          reject(new Error(`FFmpeg thumbnail error: ${err.message}`)),
+        );
+    });
+  }
+
+  async getSharedFiles({
+    userId,
+    order,
+    type,
+    page = 1,
+    ownerEmail,
+    name,
+    sortBy = 'createdAt',
+  }) {
+    const where: any = {
+      sharedWithId: userId,
+      file: {
+        DeletedFiles: null,
+        ...(type && { type }),
+        ...(ownerEmail && { user: { email: ownerEmail } }),
+        ...(name && { name: { contains: name, mode: 'insensitive' } }),
+      },
+    };
+    try {
+      const result = await this.prismaService.share.findMany({
+        where: where,
+        orderBy: {
+          ...(fileOrder.includes(sortBy)
+            ? {
+                file: {
+                  [sortBy]: order || 'desc',
+                },
+              }
+            : {
+                createdAt: order || 'desc',
+              }),
+        },
+        select: {
+          file: {
+            select: {
+              id: true,
+              name: true,
+              sizeInKb: true,
+              extension: true,
+              type: true,
+              Video: {
+                select: {
+                  thumbnail: true,
+                },
+              },
+              Image: {
+                select: {
+                  thumbnail: true,
+                },
+              },
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+        take: this.sharedItemsPerPage,
+        skip: (page - 1) * this.sharedItemsPerPage,
+      });
+
+      const count = await this.prismaService.share.count({
+        where,
+      });
+
+      const mappedResult = result.map((file) => ({
+        id: file.file.id,
+        name: file.file.name,
+        sizeInKb: file.file.sizeInKb,
+        extension: file.file.extension,
+        type: file.file.type,
+        thumbnail: file.file?.Video?.thumbnail || file.file?.Image?.thumbnail,
+        user: {
+          firstName: file.file.user.firstName,
+          lastName: file.file.user.lastName,
+          email: file.file.user.email,
+        },
+      }));
+
+      return {
+        data: mappedResult,
+        pages: Math.ceil(count / this.sharedItemsPerPage),
+      };
+    } catch (error: any) {
+      throw new InternalServerErrorException('Failed to get shared files');
+    }
+  }
+
+  async getSharedVideos({
+    userId,
+    order,
+    extension,
+    page = 1,
+    ownerEmail,
+    name,
+    duration,
+    sizeInKb,
+    sortBy,
+  }) {
+    const where: any = {
+      sharedWithId: userId,
+      file: {
+        type: 'video',
+        DeletedFiles: null,
+        ...(extension && { extension }),
+        ...(sizeInKb && { sizeInKb: { gte: +sizeInKb } }),
+        ...(ownerEmail && { user: { email: ownerEmail } }),
+        ...(name && { name: { contains: name, mode: 'insensitive' } }),
+        ...(duration && { Video: { duration: { gte: +duration } } }),
+      },
+    };
+    try {
+      const result = await this.prismaService.share.findMany({
+        where,
+        orderBy: {
+          ...(fileOrder.includes(sortBy)
+            ? {
+                file: {
+                  [sortBy]: order || 'desc',
+                },
+              }
+            : {
+                createdAt: order || 'desc',
+              }),
+        },
+        select: {
+          file: {
+            select: {
+              id: true,
+              name: true,
+              sizeInKb: true,
+              extension: true,
+              type: true,
+              Video: {
+                select: {
+                  duration: true,
+                  fps: true,
+                  resolution: true,
+                  thumbnail: true,
+                },
+              },
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+        take: this.sharedItemsPerPage,
+        skip: (page - 1) * this.sharedItemsPerPage,
+      });
+
+      const count = await this.prismaService.share.count({
+        where,
+      });
+
+      const mappedResult = result.map((file) => ({
+        id: file.file.id,
+        name: file.file.name,
+        sizeInKb: file.file.sizeInKb,
+        extension: file.file.extension,
+        type: file.file.type,
+        duration: file.file.Video.duration,
+        fps: file.file.Video.fps,
+        resolution: file.file.Video.resolution,
+        thumbnail: file.file.Video.thumbnail,
+        user: {
+          firstName: file.file.user.firstName,
+          lastName: file.file.user.lastName,
+          email: file.file.user.email,
+        },
+      }));
+
+      return {
+        data: mappedResult,
+        pages: Math.ceil(count / this.sharedItemsPerPage),
+      };
+    } catch (error: any) {
+      throw new InternalServerErrorException('Failed to get shared videos');
+    }
+  }
+
+  async getSharedImages({
+    userId,
+    order,
+    extension,
+    page = 1,
+    ownerEmail,
+    name,
+    sizeInKb,
+    sortBy,
+  }: {
+    userId: string;
+    order: 'asc' | 'desc';
+    extension: string;
+    page: number;
+    ownerEmail: string;
+    name: string;
+    sizeInKb: number;
+    sortBy: 'name' | 'createdAt' | 'extension' | 'sizeInKb';
+  }) {
+    const where: any = {
+      sharedWithId: userId,
+      file: {
+        type: 'image',
+        DeletedFiles: null,
+        ...(extension && { extension }),
+        ...(sizeInKb && { sizeInKb: { gte: +sizeInKb } }),
+        ...(ownerEmail && { user: { email: ownerEmail } }),
+        ...(name && { name: { contains: name, mode: 'insensitive' } }),
+      },
+    };
+    try {
+      const result = await this.prismaService.share.findMany({
+        where,
+        orderBy: {
+          ...(fileOrder.includes(sortBy)
+            ? {
+                file: {
+                  [sortBy]: order || 'desc',
+                },
+              }
+            : {
+                createdAt: order || 'desc',
+              }),
+        },
+        select: {
+          createdAt: true,
+          file: {
+            select: {
+              id: true,
+              name: true,
+              sizeInKb: true,
+              extension: true,
+              type: true,
+              Image: {
+                select: {
+                  resolution: true,
+                  thumbnail: true,
+                },
+              },
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+        take: this.sharedItemsPerPage,
+        skip: (page - 1) * this.sharedItemsPerPage,
+      });
+
+      const mappedResult = result.map((file) => ({
+        id: file.file.id,
+        name: file.file.name,
+        sizeInKb: file.file.sizeInKb,
+        extension: file.file.extension,
+        type: file.file.type,
+        resolution: file.file.Image.resolution,
+        thumbnail: file.file.Image.thumbnail,
+        user: {
+          firstName: file.file.user.firstName,
+          lastName: file.file.user.lastName,
+          email: file.file.user.email,
+        },
+      }));
+
+      const count = await this.prismaService.share.count({
+        where,
+      });
+
+      return {
+        data: mappedResult,
+        pages: Math.ceil(count / this.sharedItemsPerPage),
+      };
+    } catch (error: any) {
+      throw new InternalServerErrorException('Failed to get shared images');
+    }
+  }
+
+  async getSharedFile(sharedWithId: string, fileId: number) {
+    try {
+      const where: any = {
+        sharedWithId,
+        file: {
+          id: fileId,
+        },
+      };
+      const result = await this.prismaService.share.findFirst({
+        where,
+        select: {
+          file: {
+            select: {
+              id: true,
+              name: true,
+              sizeInKb: true,
+              type: true,
+              extension: true,
+              uniqueName: true,
+              userId: true,
+              Audio: {
+                select: {
+                  duration: true,
+                },
+              },
+              Video: {
+                select: {
+                  duration: true,
+                  fps: true,
+                  resolution: true,
+                },
+              },
+              Image: {
+                select: {
+                  resolution: true,
+                  thumbnail: true,
+                },
+              },
+              FileParent: {
+                select: {
+                  folder: {
+                    select: {
+                      path: true,
+                      name: true,
+                    },
+                  },
+                },
+              },
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const parentPath = result?.file?.FileParent?.folder?.path;
+      const parentName = result?.file?.FileParent?.folder?.name;
+      let filePath: string = path.join(parentPath || '', parentName || '');
+
+      if (!parentName && !parentName) {
+        filePath = 'main';
+      }
+      if (!result) throw new BadRequestException('Shared file not found');
+      const mappedResult = {
+        id: result.file.id,
+        name: result.file.name,
+        sizeInKb: result.file.sizeInKb,
+        extension: result.file.extension,
+        type: result.file.type,
+        uniqueName: result.file.uniqueName,
+        userId: result.file.userId,
+        user: {
+          firstName: result.file.user.firstName,
+          lastName: result.file.user.lastName,
+          email: result.file.user.email,
+        },
+        path: filePath,
+        duration: result.file.Audio?.duration,
+        fps: result.file.Video?.fps,
+        resolution:
+          result.file.Video?.resolution || result.file.Image?.resolution,
+        thumbnail: result.file.Image?.thumbnail,
+      };
+      return mappedResult;
+    } catch (error: any) {
+      throw new InternalServerErrorException('Failed to get shared file');
+    }
   }
 }
