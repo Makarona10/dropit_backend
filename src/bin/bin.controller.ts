@@ -34,7 +34,6 @@ export class BinController {
   async cleanBin(@Req() req: Request) {
     const user = req.user as { id: string; email: string };
     await this.binService.cleanBin(user.id);
-    console.log('Bin cleaned successfully!');
     return resObj(200, 'Bin cleaned successfully!', []);
   }
 
