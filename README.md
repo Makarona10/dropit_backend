@@ -145,16 +145,6 @@ Optional: Email Service
 
     EMAIL_PASS
 
-Optional: File Storage
-
-    STORAGE_BUCKET
-
-    STORAGE_REGION
-
-    STORAGE_ACCESS_KEY
-
-    STORAGE_SECRET_KEY
-
 Google OAuth
 
     GOOGLE_CLIENT_ID
