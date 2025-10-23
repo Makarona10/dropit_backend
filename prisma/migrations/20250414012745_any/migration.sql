@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "StorageQuota" ALTER COLUMN "usedQuota" SET DATA TYPE DOUBLE PRECISION;
