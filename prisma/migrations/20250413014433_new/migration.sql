@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Tag" ALTER COLUMN "fileId" DROP NOT NULL;
